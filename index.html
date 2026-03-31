@@ -918,7 +918,7 @@
             }, [liveData]);
 
             const displayVessels = useMemo(() => {
-                if (selectedRoutes.length === 0) return vessels;
+                if (selectedRoutes.length === 0) return [];
                 const result = [];
                 selectedRoutes.forEach(route => {
                     const apiVessels = liveData.filter(v => v.Route === route);
@@ -1312,6 +1312,15 @@
                                 ))}
                             </div>
 
+                            {selectedRoutes.length === 0 && (
+                                <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-400">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                                    <div className="text-center">
+                                        <p className="text-lg font-bold text-slate-500">표시할 항로가 없습니다</p>
+                                        <p className="text-sm mt-1">⚙ 프로그램 설정 → 항로 선택에서 항로를 선택해 주세요</p>
+                                    </div>
+                                </div>
+                            )}
                             <div className="flex-1 grid overflow-hidden" style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}>
                                 {columnGroups.map((groupList, idx) => (
                                     <div key={idx} className={`overflow-y-auto bg-white scrollbar-hide ${idx > 0 ? 'border-l border-slate-300' : ''}`}>
