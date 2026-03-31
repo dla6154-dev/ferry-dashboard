@@ -337,6 +337,9 @@
             const [resizing, setResizing] = useState(null);
             const [draggedItem, setDraggedItem] = useState(null);
             const draggedItemRef = useRef(null);
+            const [vesselOrder, setVesselOrder] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('vesselOrder') || '{}'); } catch { return {}; }
+            });
 
             const [vesselSpecs, setVesselSpecs] = useState(() => {
                 try { return JSON.parse(localStorage.getItem('vesselSpecs') || '{}'); } catch { return {}; }
@@ -433,19 +436,21 @@
                         setVessels(data.vessels);
                         setCompanyOrder(data.companyOrder);
                         if (data.visibleColumns) setVisibleColumns(data.visibleColumns);
+                        if (data.vesselOrder) setVesselOrder(data.vesselOrder);
                     }
                 };
                 syncChannel.current.onmessage = handleSync;
                 return () => { syncChannel.current.onmessage = null; };
             }, []);
 
-            const broadcastState = useCallback((newVessels, newCompanyOrder, newVisibleCols) => {
+            const broadcastState = useCallback((newVessels, newCompanyOrder, newVisibleCols, newVesselOrder) => {
                 syncChannel.current.postMessage({
                     type: 'STATE_UPDATE',
-                    data: { 
-                        vessels: newVessels, 
-                        companyOrder: newCompanyOrder, 
-                        visibleColumns: newVisibleCols || visibleColumns 
+                    data: {
+                        vessels: newVessels,
+                        companyOrder: newCompanyOrder,
+                        visibleColumns: newVisibleCols || visibleColumns,
+                        vesselOrder: newVesselOrder
                     }
                 });
             }, [visibleColumns]);
@@ -997,8 +1002,8 @@
                 if (di?.type === 'company') moveCompanyOrder(di.key, targetKey);
             };
 
-            const onVesselDragStart = (e, id) => {
-                const item = { type: 'vessel', id };
+            const onVesselDragStart = (e, id, company, routeType) => {
+                const item = { type: 'vessel', id, company, routeType: routeType || '일반' };
                 draggedItemRef.current = item;
                 setDraggedItem(item);
                 e.dataTransfer.setData("itemData", JSON.stringify(item));
@@ -1007,20 +1012,26 @@
             const onVesselDragOver = (e, targetId, targetCompany, targetRouteType) => {
                 e.preventDefault();
                 const di = draggedItemRef.current;
-                if (di?.type === 'vessel' && di.id !== targetId) {
-                    setVessels(prev => {
-                        const next = [...prev];
-                        const fromIdx = next.findIndex(v => v.id === di.id);
-                        const toIdx = next.findIndex(v => v.id === targetId);
-                        if (fromIdx === -1 || toIdx === -1) return prev;
-                        const [moved] = next.splice(fromIdx, 1);
-                        moved.company = targetCompany;
-                        moved.routeType = targetRouteType;
-                        next.splice(toIdx, 0, moved);
-                        broadcastState(next, companyOrder);
-                        return next;
-                    });
-                }
+                if (!di || di.type !== 'vessel' || di.id === targetId) return;
+                // 같은 선사 내에서만 이동
+                if (di.company !== targetCompany || di.routeType !== (targetRouteType || '일반')) return;
+                const now = Date.now();
+                if (now - lastMoveTimeRef.current < 40) return;
+                lastMoveTimeRef.current = now;
+                const groupKey = `${targetCompany}__${targetRouteType || '일반'}`;
+                setVesselOrder(prev => {
+                    const groupVessels = displayVessels.filter(v => v.company === targetCompany && (v.routeType || '일반') === (targetRouteType || '일반'));
+                    const currentOrder = prev[groupKey] ? [...prev[groupKey]] : groupVessels.map(v => v.id);
+                    const fromIdx = currentOrder.indexOf(di.id);
+                    const toIdx = currentOrder.indexOf(targetId);
+                    if (fromIdx === -1 || toIdx === -1) return prev;
+                    const next = [...currentOrder];
+                    const [moved] = next.splice(fromIdx, 1);
+                    next.splice(toIdx, 0, moved);
+                    const newVesselOrder = { ...prev, [groupKey]: next };
+                    localStorage.setItem('vesselOrder', JSON.stringify(newVesselOrder));
+                    return newVesselOrder;
+                });
             };
 
             const onDrop = (e) => {
@@ -1123,6 +1134,20 @@
                     acc[key].vessels.push(v);
                     return acc;
                 }, {});
+                // 선박 순서 적용
+                for (const [key, group] of Object.entries(grouped)) {
+                    const order = vesselOrder[key];
+                    if (order && order.length > 0) {
+                        group.vessels.sort((a, b) => {
+                            const ai = order.indexOf(a.id);
+                            const bi = order.indexOf(b.id);
+                            if (ai === -1 && bi === -1) return 0;
+                            if (ai === -1) return 1;
+                            if (bi === -1) return -1;
+                            return ai - bi;
+                        });
+                    }
+                }
 
                 // 항로 모드/일반 모드 동일하게 monitorId 필터링
                 const knownKeys = new Set(companyOrder.map(o => o.key));
@@ -1136,7 +1161,7 @@
 
                 const perCol = Math.ceil(sorted.length / columnCount) || 1;
                 return { columnGroups: Array.from({ length: columnCount }, (_, i) => sorted.slice(i * perCol, (i + 1) * perCol)) };
-            }, [displayVessels, companyOrder, monitorId, columnCount, selectedRoutes]);
+            }, [displayVessels, companyOrder, monitorId, columnCount, selectedRoutes, vesselOrder]);
 
             const getApiLogColorClass = (level) => {
                 if (level === "success") return "text-emerald-300";
@@ -1242,7 +1267,7 @@
                                                 key={g.key} group={g} onEdit={(v) => { setEditingVessel(v); setIsModalOpen(true); }}
                                                 onCompanyDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop} draggedItem={draggedItem}
                                                 columnWidths={columnWidths} fontSizes={fontSizes} fontScale={fontScale} uiScale={uiScale}
-                                                onVesselDragStart={onVesselDragStart} onVesselDragOver={onVesselDragOver} onVesselDrop={onDrop}
+                                                onVesselDragStart={(e, id) => onVesselDragStart(e, id, g.company, g.routeType || '일반')} onVesselDragOver={onVesselDragOver} onVesselDrop={onDrop}
                                                 onStatusToggle={onStatusToggle} onRemarkChange={onRemarkChange} isEditMode={isEditMode}
                                                 visibleColumns={visibleColumns} totalTableWidth={totalTableWidth}
                                             />
