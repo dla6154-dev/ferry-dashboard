@@ -77,10 +77,21 @@
         const { useState, useMemo, useCallback, useEffect, useRef, startTransition } = React;
 
         const Icon = ({ name, size = 16, className = "" }) => {
-            useEffect(() => {
-                if (window.lucide) window.lucide.createIcons();
-            }, [name]);
-            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+            const svgHtml = useMemo(() => {
+                if (!window.lucide) return null;
+                const tmp = document.createElement('div');
+                const el = document.createElement('i');
+                el.setAttribute('data-lucide', name);
+                tmp.appendChild(el);
+                window.lucide.createIcons({ el: tmp });
+                const svg = tmp.querySelector('svg');
+                if (!svg) return null;
+                svg.setAttribute('width', size);
+                svg.setAttribute('height', size);
+                return svg.outerHTML;
+            }, [name, size]);
+            if (!svgHtml) return <span style={{width:size,height:size,display:'inline-block',flexShrink:0}}/>;
+            return <span dangerouslySetInnerHTML={{__html: svgHtml}} className={className} style={{display:'inline-flex',alignItems:'center',lineHeight:0,flexShrink:0}}/>;
         };
 
         const calculateAge = (launchDateStr) => {
