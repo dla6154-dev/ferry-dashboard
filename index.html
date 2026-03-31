@@ -336,6 +336,7 @@
             const [companyOrder, setCompanyOrder] = useState([]);
             const [resizing, setResizing] = useState(null);
             const [draggedItem, setDraggedItem] = useState(null);
+            const draggedItemRef = useRef(null);
 
             const [vesselSpecs, setVesselSpecs] = useState(() => {
                 try { return JSON.parse(localStorage.getItem('vesselSpecs') || '{}'); } catch { return {}; }
@@ -983,27 +984,33 @@
                 });
             };
 
-            const onDragStart = (e, key) => { 
-                setDraggedItem({ type: 'company', key }); 
-                e.dataTransfer.setData("itemData", JSON.stringify({ type: 'company', key }));
-            };
-            
-            const onDragOver = (e, targetKey) => { 
-                e.preventDefault(); 
-                if (draggedItem?.type === 'company') moveCompanyOrder(draggedItem.key, targetKey); 
-            };
-            
-            const onVesselDragStart = (e, id) => { 
-                setDraggedItem({ type: 'vessel', id }); 
-                e.dataTransfer.setData("itemData", JSON.stringify({ type: 'vessel', id }));
+            const onDragStart = (e, key) => {
+                const item = { type: 'company', key };
+                draggedItemRef.current = item;
+                setDraggedItem(item);
+                e.dataTransfer.setData("itemData", JSON.stringify(item));
             };
 
-            const onVesselDragOver = (e, targetId, targetCompany, targetRouteType) => { 
-                e.preventDefault(); 
-                if (draggedItem?.type === 'vessel' && draggedItem.id !== targetId) {
+            const onDragOver = (e, targetKey) => {
+                e.preventDefault();
+                const di = draggedItemRef.current;
+                if (di?.type === 'company') moveCompanyOrder(di.key, targetKey);
+            };
+
+            const onVesselDragStart = (e, id) => {
+                const item = { type: 'vessel', id };
+                draggedItemRef.current = item;
+                setDraggedItem(item);
+                e.dataTransfer.setData("itemData", JSON.stringify(item));
+            };
+
+            const onVesselDragOver = (e, targetId, targetCompany, targetRouteType) => {
+                e.preventDefault();
+                const di = draggedItemRef.current;
+                if (di?.type === 'vessel' && di.id !== targetId) {
                     setVessels(prev => {
                         const next = [...prev];
-                        const fromIdx = next.findIndex(v => v.id === draggedItem.id);
+                        const fromIdx = next.findIndex(v => v.id === di.id);
                         const toIdx = next.findIndex(v => v.id === targetId);
                         if (fromIdx === -1 || toIdx === -1) return prev;
                         const [moved] = next.splice(fromIdx, 1);
@@ -1027,6 +1034,7 @@
                         return next;
                     });
                 }
+                draggedItemRef.current = null;
                 setDraggedItem(null);
             };
 
