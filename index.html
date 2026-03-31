@@ -399,6 +399,7 @@
             const [showSaveMsg, setShowSaveMsg] = useState(false);
             const [apiLogs, setApiLogs] = useState([]);
             const [showApiLogPanel, setShowApiLogPanel] = useState(false);
+            const [showChangeLog, setShowChangeLog] = useState(false);
             
             const lastMoveTimeRef = useRef(0);
             const mainRef = useRef(null);
@@ -1271,8 +1272,9 @@
                                 <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
                                 갱신: <span className="text-emerald-300">{lastUpdate}</span>
                             </div>
-                            <button onClick={() => setShowApiLogPanel(prev => !prev)} className={`p-2 rounded-lg transition-colors ${showApiLogPanel ? 'bg-white/20' : 'hover:bg-white/10'}`} title="API Log">
-                                <Icon name="activity" size={17}/>
+                            <button onClick={() => setShowChangeLog(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/10 transition-colors text-xs font-bold text-white/80 border border-white/20" title="관리선박변동">
+                                <Icon name="git-branch" size={14}/>
+                                관리선박변동
                             </button>
                             <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="설정">
                                 <Icon name="settings" size={17}/>
@@ -1341,35 +1343,6 @@
                         </div>
                     </main>
 
-                    {showApiLogPanel && (
-                        <div className="fixed right-3 bottom-3 z-[110] w-[420px] max-w-[96vw] h-80 bg-slate-950/95 text-slate-200 border border-slate-700 rounded-xl shadow-2xl flex flex-col">
-                            <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between">
-                                <div className="font-black text-xs uppercase tracking-wider text-blue-300">API Sync Log</div>
-                                <div className="flex items-center gap-2">
-                                    <button onClick={() => setApiLogs([])} className="text-[10px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600">Clear</button>
-                                    <button onClick={() => setShowApiLogPanel(false)} className="p-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600">
-                                        <Icon name="x" size={12} />
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="flex-1 overflow-y-auto p-2 space-y-1 font-mono text-[11px]">
-                                {apiLogs.length === 0 ? (
-                                    <div className="text-slate-400 px-2 py-2">No API logs yet.</div>
-                                ) : apiLogs.map(log => (
-                                    <div key={log.id} className="bg-slate-900/90 border border-slate-800 rounded px-2 py-1">
-                                        <div className="flex items-center gap-2">
-                                            <span className={`uppercase text-[10px] font-black ${getApiLogColorClass(log.level)}`}>{log.level}</span>
-                                            <span className="text-slate-500">{log.ts}</span>
-                                            <span className="text-slate-200">{log.message}</span>
-                                        </div>
-                                        {log.extra && (
-                                            <pre className="mt-1 text-[10px] text-slate-400 whitespace-pre-wrap break-all">{JSON.stringify(log.extra)}</pre>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
 
                     {showSettings && (
                         <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4" onClick={() => setShowSettings(false)}>
@@ -1567,6 +1540,31 @@
                                             <button onClick={() => setColumnCount(3)} className={`flex-1 py-3 rounded-xl font-black text-sm ${columnCount === 3 ? 'bg-[#002855] text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>3단</button>
                                         </div>
                                     </div>
+                                    {/* API Sync Log */}
+                                    <div className="border-t pt-5">
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center justify-between">
+                                            <span className="flex items-center gap-2"><Icon name="activity" size={13}/> API Sync Log</span>
+                                            {apiLogs.length > 0 && (
+                                                <button onClick={() => setApiLogs([])} className="text-[10px] px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-500 border border-slate-200 font-bold transition-colors">Clear</button>
+                                            )}
+                                        </h4>
+                                        <div className="h-44 overflow-y-auto bg-slate-950 rounded-xl p-2 space-y-1 font-mono text-[11px]">
+                                            {apiLogs.length === 0 ? (
+                                                <div className="text-slate-500 px-2 py-2">No API logs yet.</div>
+                                            ) : apiLogs.map(log => (
+                                                <div key={log.id} className="bg-slate-900 border border-slate-800 rounded px-2 py-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`uppercase text-[10px] font-black ${getApiLogColorClass(log.level)}`}>{log.level}</span>
+                                                        <span className="text-slate-500">{log.ts}</span>
+                                                        <span className="text-slate-200">{log.message}</span>
+                                                    </div>
+                                                    {log.extra && (
+                                                        <pre className="mt-1 text-[10px] text-slate-400 whitespace-pre-wrap break-all">{JSON.stringify(log.extra)}</pre>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                     {/* 설정 내보내기/불러오기 */}
                                     <div className="border-t pt-5 space-y-2">
                                         <button onClick={() => { const blob = new Blob([JSON.stringify({ vessels, companyOrder, columnWidths, fontSizes, uiScale, statsScale, headerFontScale, visibleColumns }, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `목포항_운항현황_백업.json`; a.click(); URL.revokeObjectURL(url); }} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-black text-sm flex items-center justify-center gap-2 shadow-md transition-all">
@@ -1582,6 +1580,31 @@
                                     <button onClick={() => setShowSettings(false)} className="px-6 py-2 bg-[#002855] hover:bg-[#003F88] text-white rounded-lg text-sm font-black transition-colors">
                                         닫기
                                     </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showChangeLog && (
+                        <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4" onClick={() => setShowChangeLog(false)}>
+                            <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden text-slate-800 max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                                <div className="bg-[#002855] px-6 py-4 flex items-center justify-between shrink-0">
+                                    <div className="flex items-center gap-2 text-white font-black tracking-wider text-sm">
+                                        <Icon name="git-branch" size={16} className="text-blue-300"/> 관리선박변동
+                                    </div>
+                                    <button onClick={() => setShowChangeLog(false)} className="text-white/60 hover:text-white transition-colors">
+                                        <Icon name="x" size={18}/>
+                                    </button>
+                                </div>
+                                <div className="flex-1 flex flex-col items-center justify-center gap-4 p-10 text-slate-400">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                    <div className="text-center">
+                                        <p className="text-base font-black text-slate-500">준비 중입니다</p>
+                                        <p className="text-sm mt-1 text-slate-400">등록 항로의 선박 증선·감선 이력 기능이 곧 추가됩니다</p>
+                                    </div>
+                                </div>
+                                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
+                                    <button onClick={() => setShowChangeLog(false)} className="px-6 py-2 bg-[#002855] hover:bg-[#003F88] text-white rounded-lg text-sm font-black transition-colors">닫기</button>
                                 </div>
                             </div>
                         </div>
