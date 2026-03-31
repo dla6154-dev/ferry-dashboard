@@ -542,7 +542,7 @@
                             'Content-Type': 'application/json',
                             'Prefer': 'resolution=merge-duplicates'
                         },
-                        body: JSON.stringify({ center_code: code, center_name: name, updated_at: new Date().toISOString() })
+                        body: JSON.stringify({ center_code: code, center_name: name, selected_routes: selectedRoutes, updated_at: new Date().toISOString() })
                     });
                     if (!res.ok) throw new Error(await res.text());
                     localStorage.setItem('centerCode', code);
@@ -557,10 +557,22 @@
                 }
             };
 
-            // ── 센터 코드로 제원 불러오기 ──────────────────────────────────
+            // ── 센터 코드로 제원 + 항로 불러오기 ──────────────────────────
             const fetchSpecsByCenter = React.useCallback(async (code) => {
                 if (!code) return;
                 try {
+                    // 센터 정보(항로 포함) 먼저 불러오기
+                    const centerRes = await fetch(`${SUPABASE_URL}/rest/v1/centers?center_code=eq.${code}&select=selected_routes`, {
+                        headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
+                    });
+                    if (centerRes.ok) {
+                        const centerRows = await centerRes.json();
+                        if (centerRows.length > 0 && Array.isArray(centerRows[0].selected_routes)) {
+                            const routes = centerRows[0].selected_routes;
+                            localStorage.setItem('selectedRoutes', JSON.stringify(routes));
+                            setSelectedRoutes(routes);
+                        }
+                    }
                     const res = await fetch(`${SUPABASE_URL}/rest/v1/vessel_specs?center_code=eq.${code}&select=*`, {
                         headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
                     });
@@ -1587,6 +1599,18 @@
                                     <button
                                         onClick={() => {
                                             localStorage.setItem('selectedRoutes', JSON.stringify(selectedRoutes));
+                                            if (centerCode) {
+                                                fetch(`${SUPABASE_URL}/rest/v1/centers`, {
+                                                    method: 'POST',
+                                                    headers: {
+                                                        'apikey': SUPABASE_ANON_KEY,
+                                                        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                                                        'Content-Type': 'application/json',
+                                                        'Prefer': 'resolution=merge-duplicates'
+                                                    },
+                                                    body: JSON.stringify({ center_code: centerCode, center_name: centerName, selected_routes: selectedRoutes, updated_at: new Date().toISOString() })
+                                                }).catch(() => {});
+                                            }
                                             setShowRouteSelector(false);
                                         }}
                                         className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-black transition-colors"
