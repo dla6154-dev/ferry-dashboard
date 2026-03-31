@@ -1,0 +1,7 @@
+vessel_data.js
+vessel_data_generator.py
+*.py
+*.log
+node_modules/
+.env
+supabase/.temp/

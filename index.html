@@ -1,0 +1,1631 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="./ferry_icon_ship.ico">
+    <link rel="shortcut icon" href="./ferry_icon_ship.ico">
+    <title>목포항 여객선 현황 모니터링 (실시간 항로 연동)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Babel CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- SheetJS for Excel import/export -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <!-- Supabase JS Client for Realtime -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;700;900&display=swap');
+        body {
+            font-family: 'Pretendard', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #F0F4F8;
+            overflow: hidden;
+        }
+        html, body, #root { height: 100%; width: 100%; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        tr { height: calc(var(--row-height, 2.5rem) * var(--ui-scale, 1)); transition: background-color 0.15s; }
+        
+        .dragging { 
+            opacity: 0.15; 
+            background-color: #f1f5f9 !important;
+            filter: grayscale(1);
+        }
+        
+        .vessel-row:hover { background-color: rgba(59, 130, 246, 0.08); }
+
+        @keyframes slideUp {
+            0% { opacity: 0; transform: translate(-50%, 20px); }
+            100% { opacity: 1; transform: translate(-50%, 0); }
+        }
+        .save-confirm-toast {
+            position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); z-index: 9999;
+            background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 9999px;
+            font-weight: 900; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
+            display: flex; align-items: center; gap: 10px; animation: slideUp 0.5s forwards; border: 2px solid #60a5fa;
+        }
+
+        .resizable-th { position: relative; }
+        .col-resizer { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 10; }
+        .col-resizer:hover { background: rgba(148, 163, 184, 0.35); }
+
+        .drag-handle { cursor: grab; }
+        .drag-handle:active { cursor: grabbing; }
+
+        /* 통제(Status 1) 및 비운항(Status 2) 스타일 */
+        .row-status-control td:not(.company-cell) {
+            background-color: #fee2e2 !important;
+            color: #991b1b !important;
+        }
+        .row-status-stop td:not(.company-cell) {
+            background-color: #d1fae5 !important;
+            color: #065f46 !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useCallback, useEffect, useRef } = React;
+
+        const Icon = ({ name, size = 16, className = "" }) => {
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+        };
+
+        const calculateAge = (launchDateStr) => {
+            if (!launchDateStr) return { years: 0, days: 0 };
+            const launchDate = new Date(launchDateStr);
+            const today = new Date();
+            if (isNaN(launchDate.getTime())) return { years: 0, days: 0 };
+
+            let years = today.getFullYear() - launchDate.getFullYear();
+            let lastAnniversary = new Date(launchDate);
+            lastAnniversary.setFullYear(launchDate.getFullYear() + years);
+            if (today < lastAnniversary) {
+                years--;
+                lastAnniversary = new Date(launchDate);
+                lastAnniversary.setFullYear(launchDate.getFullYear() + years);
+            }
+            const diffTime = today.getTime() - lastAnniversary.getTime();
+            const days = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+            return { years: Math.max(0, years), days: Math.max(0, days) };
+        };
+
+        const COLUMN_LABELS = {
+            company: "선사",
+            name: "선명",
+            route: "항로",
+            tonnage: "톤수",
+            capacity: "정원",
+            crew: "승무정원",
+            cargo: "적재량",
+            cars: "차량",
+            launchDate: "진수",
+            speed: "속력",
+            age: "선령",
+            inspection: "검사만료",
+            remarks: "비고"
+        };
+
+        const initialData = [
+            { id: 1, company: "서진도농업협동조합", name: "가사페리호", route: "쉬미-가사", tonnage: 161.00, capacity: 50, crew: 3, cargo: 20, cars: 8, launchDate: "2018-01-01", speed: 10.0, routeType: "일반", psnshp_cd: "F122" },
+            { id: 2, company: "(주)남해고속", name: "뉴돌핀호", route: "목포-홍도", tonnage: 375.00, capacity: 340, crew: 6, cargo: 0, cars: 0, launchDate: "2003-01-01", speed: 34.0, routeType: "일반", psnshp_cd: "F125" },
+            { id: 3, company: "(유)해진해운", name: "뉴드림호", route: "송공-흑산", tonnage: 2103.00, capacity: 270, crew: 8, cargo: 120, cars: 30, launchDate: "2015-02-17", speed: 12.5, routeType: "일반", psnshp_cd: "F98" },
+            { id: 4, company: "(주)남해고속", name: "뉴엔젤호", route: "목포-홍도", tonnage: 320.00, capacity: 337, launchDate: "2002-06-10", speed: 33.0, routeType: "일반", psnshp_cd: "F17" },
+            { id: 5, company: "(주)남해고속", name: "뉴퀸", route: "목포-홍도", tonnage: 254.00, capacity: 337, launchDate: "2006-04-01", speed: 34.0, routeType: "일반", psnshp_cd: "F130" },
+            { id: 6, company: "(합)대흥", name: "대흥고속카페리", route: "남강-가산", tonnage: 424.00, capacity: 350, launchDate: "2011-07-15", speed: 14.5, routeType: "일반", psnshp_cd: "F26" },
+            { id: 7, company: "도초농업협동조합", name: "도초카훼리", route: "도초-목포", tonnage: 466.00, capacity: 250, launchDate: "2014-10-28", speed: 13.5, routeType: "일반", psnshp_cd: "F97" },
+            { id: 8, company: "(주)동양훼리", name: "동양골드", route: "목포-홍도", tonnage: 314.00, capacity: 375, launchDate: "1996-11-01", speed: 35.0, routeType: "일반", psnshp_cd: "F20" },
+            { id: 9, company: "씨월드고속훼리(주)", name: "산타모니카", route: "진도-제주", tonnage: 3321.00, capacity: 606, launchDate: "2022-01-04", speed: 42.0, routeType: "일반", psnshp_cd: "F143" },
+            { id: 10, company: "서진도농업협동조합", name: "새섬두레호", route: "율목-진도", tonnage: 562.00, capacity: 300, launchDate: "2017-07-12", speed: 15.0, routeType: "일반", psnshp_cd: "F53" },
+            { id: 11, company: "비금농업협동조합", name: "섬드리비금농협고속페리", route: "남강-가산", tonnage: 580.00, capacity: 290, launchDate: "2016-06-30", speed: 13.5, routeType: "일반", psnshp_cd: "F105" },
+            { id: 12, company: "신안군", name: "슬로시티2호", route: "송도-병풍", tonnage: 162.00, capacity: 145, launchDate: "2001-01-22", speed: 10.0, routeType: "일반", psnshp_cd: "F112" },
+            { id: 13, company: "(재)신안교통재단", name: "슬로시티3호", route: "하의-도초", tonnage: 130.00, capacity: 125, launchDate: "2014-06-17", speed: 12.0, routeType: "일반", psnshp_cd: "F127" },
+            { id: 14, company: "(재)신안교통재단", name: "슬로시티5호", route: "송공-병풍", tonnage: 167.00, capacity: 184, launchDate: "2017-04-29", speed: 12.0, routeType: "일반", psnshp_cd: "F157" },
+            { id: 15, company: "신안군", name: "슬로시티6호", route: "송도-병풍", tonnage: 337.00, capacity: 250, launchDate: "2024-02-28", speed: 12.0, routeType: "일반", psnshp_cd: "F167" },
+            { id: 16, company: "신안군", name: "슬로시티호", route: "증도-자은", tonnage: 281.00, capacity: 150, launchDate: "2016-06-24", speed: 12.0, routeType: "일반", psnshp_cd: "F119" },
+            { id: 17, company: "(유)신진해운", name: "슬로아일랜드호", route: "목포-외달", tonnage: 223.00, capacity: 160, launchDate: "2001-09-20", speed: 12.0, routeType: "일반", psnshp_cd: "F128" },
+            { id: 18, company: "씨월드고속훼리(주)", name: "엔젤", route: "진도-제주", tonnage: 280.00, capacity: 170, launchDate: "2004-12-01", speed: 23.0, routeType: "일반", psnshp_cd: "F153" },
+            { id: 19, company: "(유)신진해운", name: "영광사랑", route: "향화-송이", tonnage: 166.00, capacity: 146, launchDate: "2016-12-17", speed: 12.0, routeType: "일반", psnshp_cd: "F158" },
+            { id: 20, company: "신안교통재단", name: "천사1호", route: "목포-상태서리", tonnage: 486.00, capacity: 357, launchDate: "2016-01-13", speed: 14.0, routeType: "일반", psnshp_cd: "F161" },
+            { id: 21, company: "신안교통재단", name: "천사3호", route: "목포-상태동리", tonnage: 720.00, capacity: 429, launchDate: "2017-05-31", speed: 14.0, routeType: "일반", psnshp_cd: "F163" },
+            { id: 22, company: "씨월드고속훼리(주)", name: "퀸제누비아", route: "목포-제주", tonnage: 27391.00, capacity: 1284, launchDate: "2020-03-20", speed: 22.0, routeType: "일반", psnshp_cd: "F135" },
+            { id: 23, company: "씨월드고속훼리(주)", name: "퀸제누비아2", route: "목포-제주", tonnage: 26546.00, capacity: 1010, launchDate: "2021-04-27", speed: 22.7, routeType: "일반", psnshp_cd: "F151" },
+            { id: 24, company: "(유)신진해운", name: "퍼스트엔젤", route: "목포-상태서리", tonnage: 170.00, capacity: 200, launchDate: "2009-01-01", speed: 23.0, routeType: "일반", psnshp_cd: "F146" },
+            { id: 25, company: "(주)남해고속", name: "핑크돌핀호", route: "목포-홍도", tonnage: 223.00, capacity: 250, launchDate: "1996-06-05", speed: 30.0, routeType: "일반", psnshp_cd: "F14" },
+            { id: 26, company: "(주)에이치엘해운", name: "한림페리11호", route: "진도-서거차", tonnage: 297.00, capacity: 275, launchDate: "2015-10-19", speed: 13.0, routeType: "일반", psnshp_cd: "F101" },
+            { id: 27, company: "(유)해진해운", name: "해진고속카페리", route: "우수영-상태동리", tonnage: 388.00, capacity: 195, launchDate: "2003-08-01", speed: 12.0, routeType: "일반", psnshp_cd: "F152" },
+        ];
+
+        const columnMinWidths = { 
+            company: 80, name: 160, route: 80, tonnage: 45, capacity: 40, 
+            crew: 40, cargo: 40, cars: 40, launchDate: 50, speed: 40, remarks: 80, age: 100, inspection: 130
+        };
+
+        const GroupItem = ({ group, onEdit, onCompanyDragStart, onDragOver, onDrop, draggedItem, columnWidths, fontSizes, fontScale, uiScale, onVesselDragStart, onVesselDragOver, onVesselDrop, onStatusToggle, onRemarkChange, isEditMode, visibleColumns, totalTableWidth }) => {
+            const routeCount = new Set(group.vessels.map(v => v.route)).size;
+            const isAuxRoute = group.routeType === "보조";
+            const companyBgClass = isAuxRoute ? "bg-emerald-900/95" : "bg-slate-900/95";
+            const companyLines = (group.company || '').split(/\n|\|/).map(s => s.trim()).filter(Boolean);
+            const subFontSize = Math.max(8, fontSizes.company * 0.7);
+
+            const cellStyle = (key) => ({
+                width: columnWidths[key] ? `${columnWidths[key]}px` : undefined,
+                minWidth: columnWidths[key] ? `${columnWidths[key]}px` : undefined,
+                maxWidth: columnWidths[key] ? `${columnWidths[key]}px` : undefined,
+                fontSize: fontSizes[key] ? `${fontSizes[key] * fontScale * uiScale}px` : undefined,
+                display: visibleColumns[key] ? undefined : 'none'
+            });
+
+            return (
+                <div
+                    onDragOver={(e) => onDragOver(e, group.key)}
+                    onDrop={(e) => onDrop(e)}
+                    className={`relative transition-all ${draggedItem?.type === 'company' && draggedItem?.key === group.key ? 'dragging' : ''}`}
+                >
+                    <table className="table-fixed" style={{width: `${totalTableWidth}px`, minWidth: `${totalTableWidth}px`}}>
+                        <tbody>
+                            {group.vessels.map((vessel, index) => {
+                                const isLastInGroup = index === group.vessels.length - 1;
+                                const age = calculateAge(vessel.launchDate);
+                                const formattedDate = vessel.launchDate ? (() => {
+                                    const [y, m, d] = vessel.launchDate.split("-");
+                                    return `${(y || "").slice(2)}.${Number(m)}.${Number(d)}`;
+                                })() : "-";
+
+                                let ageTextColor = "text-blue-900";
+                                let ageBgColor = "bg-blue-100";
+                                let ageBorderColor = "border-blue-400";
+                                if (age.years >= 25) { ageTextColor = "text-red-700"; ageBgColor = "bg-red-50"; ageBorderColor = "border-red-600"; }
+                                else if (age.years >= 20) { ageTextColor = "text-amber-900"; ageBgColor = "bg-amber-50"; ageBorderColor = "border-amber-600"; }
+
+                                // 검사만료 색상 계산
+                                const inspectionExpiry = vessel.inspectionDate ? new Date(vessel.inspectionDate) : null;
+                                const today = new Date(); today.setHours(0,0,0,0);
+                                let inspectionColor = "text-slate-700";
+                                let inspectionBg = "";
+                                if (inspectionExpiry) {
+                                    const daysLeft = Math.floor((inspectionExpiry - today) / 86400000);
+                                    if (daysLeft <= 30) { inspectionColor = "text-red-700 font-black"; inspectionBg = "bg-red-50"; }
+                                    else if (daysLeft <= 90) { inspectionColor = "text-amber-700 font-black"; inspectionBg = "bg-amber-50"; }
+                                }
+                                const inspectionText = vessel.inspectionDate
+                                    ? `${vessel.inspectionDate}${vessel.inspectionType ? `(${vessel.inspectionType})` : ''}`
+                                    : "-";
+
+                                const vesselStatus = Number(vessel.status) || 0;
+                                const statusClass = vesselStatus === 1 ? "row-status-control" : vesselStatus === 2 ? "row-status-stop" : "";
+                                const noSpecsClass = vessel._noSpecs ? "bg-yellow-50" : "";
+
+                                const groupBorderStyle = {
+                                    ...(index === 0 ? { borderTop: '1px solid #94a3b8' } : { borderTop: '1px solid #e2e8f0' }),
+                                    ...(isLastInGroup ? { borderBottom: '1px solid #94a3b8' } : {})
+                                };
+
+                                return (
+                                    <tr
+                                        key={vessel.id}
+                                        onDragOver={(e) => onVesselDragOver(e, vessel.id, group.company, group.routeType)}
+                                        onDrop={(e) => onVesselDrop(e)}
+                                        className={`hover:bg-blue-50 transition-colors group vessel-row divide-x divide-slate-100 ${statusClass} ${noSpecsClass}
+                                                   ${draggedItem?.type === 'vessel' && draggedItem?.id === vessel.id ? 'dragging' : ''}`}
+                                        style={groupBorderStyle}
+                                    >
+                                        {index === 0 && visibleColumns.company && (
+                                            <td
+                                                rowSpan={group.vessels.length}
+                                                className={`p-0.5 ${isAuxRoute ? 'bg-emerald-800' : 'bg-[#002855]'} text-white align-middle relative drag-handle company-cell`}
+                                                style={cellStyle('company')}
+                                                draggable
+                                                onDragStart={(e) => onCompanyDragStart(e, group.key)}
+                                            >
+                                                <div className="h-full flex flex-col justify-center px-1 py-1">
+                                                    <div className="font-black leading-tight uppercase tracking-tight text-center" style={{fontSize: `${fontSizes.company * fontScale * uiScale}px`}}>
+                                                        {(companyLines.length ? companyLines : ['-']).map((line, i) => <div key={i}>{line}</div>)}
+                                                    </div>
+                                                    <div className="font-bold mt-2 opacity-80 leading-none text-center" style={{color: isAuxRoute ? '#a7f3d0' : '#bfdbfe', fontSize: `${subFontSize * fontScale * uiScale}px`}}>
+                                                        {routeCount}항로 {group.vessels.length}척
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        )}
+                                        {visibleColumns.name && (
+                                            <td 
+                                                className="p-0.5 text-slate-900 truncate text-center font-black select-none drag-handle cursor-pointer"
+                                                style={cellStyle('name')}
+                                                draggable
+                                                onDragStart={(e) => onVesselDragStart(e, vessel.id)}
+                                                onClick={(e) => { 
+                                                    e.stopPropagation();
+                                                    if (isEditMode) onEdit(vessel); 
+                                                    else onStatusToggle(vessel.id);
+                                                }}
+                                            >
+                                                <div className="flex flex-col items-center">
+                                                    <span>{vessel.name}</span>
+                                                    <span className="flex items-center gap-1 leading-none">
+                                                        {vessel.psnshp_cd && <span className="text-[9px] text-slate-400 font-mono">[{vessel.psnshp_cd}]</span>}
+                                                        {vessel._noSpecs && <span className="text-[9px] text-amber-500 font-bold">제원 미등록</span>}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                        )}
+                                        {visibleColumns.route && (
+                                            <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-slate-500 truncate text-center leading-tight font-black uppercase italic drag-handle" style={cellStyle('route')}>
+                                                {vessel.route || "-"}
+                                            </td>
+                                        )}
+                                        {visibleColumns.tonnage && <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-center font-mono text-slate-700 font-black drag-handle" style={cellStyle('tonnage')}>{(vessel.tonnage || 0).toLocaleString()}</td>}
+                                        {visibleColumns.capacity && <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-center font-mono text-slate-700 font-black drag-handle" style={cellStyle('capacity')}>{(vessel.capacity || 0).toLocaleString()}</td>}
+                                        {visibleColumns.crew && <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-center font-mono text-slate-700 font-black drag-handle" style={cellStyle('crew')}>{(vessel.crew || 0).toLocaleString()}</td>}
+                                        {visibleColumns.cargo && <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-center font-mono text-slate-700 font-black drag-handle" style={cellStyle('cargo')}>{(vessel.cargo || 0).toLocaleString()}</td>}
+                                        {visibleColumns.cars && <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-center font-mono text-slate-700 font-black drag-handle" style={cellStyle('cars')}>{(vessel.cars || 0).toLocaleString()}</td>}
+                                        {visibleColumns.launchDate && <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-center text-slate-400 font-mono drag-handle" style={cellStyle('launchDate')}>{formattedDate}</td>}
+                                        {visibleColumns.speed && <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-center font-mono text-slate-700 font-black drag-handle" style={cellStyle('speed')}>{(Number(vessel.speed) || 0).toFixed(1)}</td>}
+                                        {visibleColumns.age && (
+                                            <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className={`p-0.5 text-center font-black ${ageTextColor} drag-handle`} style={cellStyle('age')}>
+                                                {age.years}년 {age.days}일
+                                            </td>
+                                        )}
+                                        {visibleColumns.inspection && (
+                                            <td draggable onDragStart={(e) => onVesselDragStart(e, vessel.id)} className="p-0.5 text-center drag-handle" style={cellStyle('inspection')}>
+                                                {vessel.inspectionDate ? (() => {
+                                                    const exp = new Date(vessel.inspectionDate);
+                                                    const now = new Date(); now.setHours(0,0,0,0);
+                                                    const days = Math.floor((exp - now) / 86400000);
+                                                    const label = `${vessel.inspectionDate}${vessel.inspectionType ? `(${vessel.inspectionType})` : ''}`;
+                                                    const [bg, text] = days < 0 ? ['#FEE2E2','#B91C1C'] : days <= 30 ? ['#FEE2E2','#DC2626'] : days <= 90 ? ['#FEF3C7','#B45309'] : ['#F1F5F9','#475569'];
+                                                    return (
+                                                        <div style={{display:'inline-flex', alignItems:'center', background:bg, color:text, borderRadius:'8px', padding:'2px 6px', fontSize:'12px', fontWeight:'700', lineHeight:'1.4', whiteSpace:'nowrap'}}>
+                                                            {label}
+                                                        </div>
+                                                    );
+                                                })() : <span className="text-slate-300">-</span>}
+                                            </td>
+                                        )}
+                                        {visibleColumns.remarks && (
+                                            <td className="p-0.5 text-left text-slate-900 truncate leading-tight font-black" style={cellStyle('remarks')}>
+                                                <div className="w-full px-1 min-h-[1.5rem] flex items-center overflow-hidden whitespace-nowrap">
+                                                    {isEditMode ? (
+                                                        <input
+                                                            value={vessel.remarks || ""}
+                                                            onChange={(e) => onRemarkChange(vessel.id, e.target.value)}
+                                                            className="w-full bg-slate-100 outline-none px-1 rounded"
+                                                        />
+                                                    ) : (
+                                                        <span className="truncate" title={vessel.remarks}>{vessel.remarks || ""}</span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        )}
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const STORAGE_KEY = "mokpo_port_monitor_data_v45_route_sync";
+            const syncChannel = useRef(new BroadcastChannel('mokpo_vessel_sync_v2'));
+
+            // ── Supabase 설정 ─────────────────────────────────────────────
+            // 아래 두 값을 Supabase 프로젝트 설정 > API 에서 복사하세요.
+            const SUPABASE_URL      = "https://fnpsaypaxpxyyqmrqwai.supabase.co";
+            const SUPABASE_ANON_KEY = "sb_publishable_o-xN5hfZL6zWqrSGfilJDw_YJNhNEOx";
+            const SUPABASE_TABLE    = "vessel_status"; // 실제 테이블명으로 변경
+            // ─────────────────────────────────────────────────────────────
+
+            const LOCAL_DATA_JS_PATH = "vessel_data.js";
+
+            const [vessels, setVessels] = useState([]);
+            const [liveData, setLiveData] = useState([]);
+            const [companyOrder, setCompanyOrder] = useState([]);
+            const [resizing, setResizing] = useState(null);
+            const [draggedItem, setDraggedItem] = useState(null);
+
+            const [vesselSpecs, setVesselSpecs] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('vesselSpecs') || '{}'); } catch { return {}; }
+            });
+            const [selectedRoutes, setSelectedRoutes] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('selectedRoutes') || '[]'); } catch { return []; }
+            });
+            const [showRouteSelector, setShowRouteSelector] = useState(false);
+            const [excelImportStatus, setExcelImportStatus] = useState('');
+
+            // ── 센터 코드 ─────────────────────────────────────────────────────
+            const [centerCode, setCenterCode] = useState(() => localStorage.getItem('centerCode') || '');
+            const [centerName, setCenterName] = useState(() => localStorage.getItem('centerName') || '');
+            const [centerCodeInput, setCenterCodeInput] = useState('');
+            const [centerNameInput, setCenterNameInput] = useState('');
+            const [centerSaveStatus, setCenterSaveStatus] = useState('');
+            
+            const [lastUpdate, setLastUpdate] = useState("연동 대기 중...");
+            const [editingVessel, setEditingVessel] = useState(null);
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+            const [isTableSettingsOpen, setIsTableSettingsOpen] = useState(false);
+            const [showSettings, setShowSettings] = useState(false);
+            
+            const [uiScale, setUiScale] = useState(1.0);
+            const [columnCount, setColumnCount] = useState(1); 
+            const [monitorId, setMonitorId] = useState(1);
+            
+            const [fontScale, setFontScale] = useState(1.2);
+            const [rowHeight, setRowHeight] = useState(40);
+            const [statsScale, setStatsScale] = useState(1.2); 
+            const [headerFontScale, setHeaderFontScale] = useState(1.2);
+            
+            const [visibleColumns, setVisibleColumns] = useState({
+                company: true, name: true, route: true, tonnage: true, capacity: true,
+                crew: true, cargo: true, cars: true, launchDate: true, speed: true, age: true, inspection: true, remarks: true
+            });
+
+            const [columnWidths, setColumnWidths] = useState({ 
+                company: 100, name: 240, route: 110, tonnage: 60, capacity: 50, 
+                crew: 50, cargo: 60, cars: 50,
+                launchDate: 60, speed: 50, age: 140, inspection: 150, remarks: 250
+            });
+            const [fontSizes, setFontSizes] = useState({ 
+                company: 14, name: 18, route: 14, tonnage: 14, capacity: 14, 
+                crew: 14, cargo: 14, cars: 14,
+                launchDate: 12, speed: 14, age: 16, inspection: 12, remarks: 14
+            });
+            
+            const [isEditMode, setIsEditMode] = useState(false);
+            const [showSaveMsg, setShowSaveMsg] = useState(false);
+            const [apiLogs, setApiLogs] = useState([]);
+            const [showApiLogPanel, setShowApiLogPanel] = useState(false);
+            
+            const lastMoveTimeRef = useRef(0);
+            const mainRef = useRef(null);
+            const tableHeaderRef = useRef(null);
+
+            const addApiLog = useCallback((level, message, extra = null) => {
+                const entry = {
+                    id: Date.now() + Math.random(),
+                    ts: new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace("T", " "),
+                    level,
+                    message,
+                    extra: extra && typeof extra === "object" ? extra : null
+                };
+                setApiLogs(prev => [entry, ...prev].slice(0, 150));
+            }, []);
+
+            // 초기 데이터 로드
+            useEffect(() => {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    try {
+                        const parsed = JSON.parse(saved);
+                        setVessels(parsed.vessels || initialData);
+                        setCompanyOrder(parsed.companyOrder || []);
+                        setUiScale(parsed.uiScale || 1.0);
+                        setColumnCount(parsed.columnCount || 1);
+                        if (parsed.columnWidths) setColumnWidths(prev => ({...prev, ...parsed.columnWidths}));
+                        if (parsed.fontSizes) setFontSizes(prev => ({...prev, ...parsed.fontSizes}));
+                        if (parsed.statsScale) setStatsScale(parsed.statsScale);
+                        if (parsed.headerFontScale) setHeaderFontScale(parsed.headerFontScale);
+                        if (parsed.visibleColumns) setVisibleColumns(prev => ({...prev, ...parsed.visibleColumns}));
+                    } catch (e) { setVessels(initialData); }
+                } else { setVessels(initialData); }
+            }, []);
+
+            // 브로드캐스트 채널 동기화
+            useEffect(() => {
+                const handleSync = (event) => {
+                    const { type, data } = event.data;
+                    if (type === 'STATE_UPDATE') {
+                        setVessels(data.vessels);
+                        setCompanyOrder(data.companyOrder);
+                        if (data.visibleColumns) setVisibleColumns(data.visibleColumns);
+                    }
+                };
+                syncChannel.current.onmessage = handleSync;
+                return () => { syncChannel.current.onmessage = null; };
+            }, []);
+
+            const broadcastState = useCallback((newVessels, newCompanyOrder, newVisibleCols) => {
+                syncChannel.current.postMessage({
+                    type: 'STATE_UPDATE',
+                    data: { 
+                        vessels: newVessels, 
+                        companyOrder: newCompanyOrder, 
+                        visibleColumns: newVisibleCols || visibleColumns 
+                    }
+                });
+            }, [visibleColumns]);
+
+            // ── Excel 템플릿 다운로드 (기존 Supabase 데이터 포함) ────────────
+            const downloadExcelTemplate = async () => {
+                const XLSX = window.XLSX;
+                if (!XLSX) { alert("SheetJS 라이브러리가 로드되지 않았습니다."); return; }
+
+                const headers = ["선박코드","선명","선사명","항로구분","톤수(GT)","정원","진수일","속력(노트)","승무원","적재량(톤)","차량수","검사종류","검사만료","비고"];
+                let rows = [];
+
+                // 센터 코드가 있으면 Supabase에서 기존 데이터 불러오기
+                if (centerCode) {
+                    try {
+                        const res = await fetch(
+                            `${SUPABASE_URL}/rest/v1/vessel_specs?center_code=eq.${centerCode}&select=*&order=psnshp_cd.asc`,
+                            { headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } }
+                        );
+                        if (res.ok) {
+                            const existing = await res.json();
+                            rows = existing.map(r => [
+                                r.psnshp_cd || '', r.vessel_name || '', r.company || '',
+                                r.route_type || '', r.tonnage || '', r.capacity || '',
+                                r.launch_date || '', r.speed || '', r.crew || '',
+                                r.cargo || '', r.cars || '', r.inspection_type || '', r.inspection_date || '', r.remarks || ''
+                            ]);
+                        }
+                    } catch(e) { console.warn('Supabase 조회 실패:', e); }
+                }
+
+                // Supabase 데이터 없으면 localStorage vesselSpecs 사용
+                if (rows.length === 0 && Object.keys(vesselSpecs).length > 0) {
+                    rows = Object.entries(vesselSpecs).map(([cd, s]) => [
+                        cd, s.선명||'', s.선사||'', s.항로구분||'', s.톤수||'', s.정원||'',
+                        s.진수일||'', s.속력||'', s.승무원||'', s.적재량||'', s.차량수||'', s.검사종류||'', s.검사만료||'', s.비고||''
+                    ]);
+                }
+
+                // 데이터 없으면 빈 샘플 행 3개
+                if (rows.length === 0) {
+                    rows = [
+                        ["F122","가사페리호","","일반","","","2018-01-01",10.0,3,20,8,"정기검사","2026-06-30",""],
+                        ["F67","섬사랑12호","","보조","","","2001-01-22",10.0,3,0,0,"중간검사","2025-12-31",""],
+                        ["F125","뉴돌핀호","","일반","","","2003-01-01",34.0,6,0,0,"정기검사","2026-03-15",""],
+                    ];
+                }
+
+                const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+                ws['!cols'] = [12,16,16,12,10,8,14,12,10,12,10,14,14,20].map(w => ({ wch: w }));
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "선박제원");
+                const ws2 = XLSX.utils.aoa_to_sheet([
+                    ["[작성 방법]"],
+                    ["선박코드 - psnshp_cd 코드 (예: F122) — 매칭 기준 (필수)"],
+                    ["선명     - 참고용 (API에서 자동으로 가져오므로 비워도 됨)"],
+                    ["선사명   - 비우면 API값 사용, 입력하면 입력값 우선"],
+                    ["항로구분 - \"일반\" 또는 \"보조\" 입력 (필수)"],
+                    ["톤수(GT) - 비우면 API값 사용, 입력하면 입력값 우선"],
+                    ["정원     - 비우면 API값 사용, 입력하면 입력값 우선"],
+                    ["진수일   - YYYY-MM-DD 형식 (예: 2018-01-01), 선령 자동 계산"],
+                    ["속력     - 노트(knot) 단위"],
+                    ["승무원   - 명 단위"],
+                    ["적재량   - 톤 단위"],
+                    ["차량수   - 대 단위"],
+                    ["검사종류 - 예: 정기검사, 중간검사, 임시검사 등"],
+                    ["검사만료 - YYYY-MM-DD 형식 (예: 2026-06-30), 1개월 전 빨간색, 3개월 전 노란색"],
+                    [""],
+                    ["※ 엑셀에 값이 있으면 엑셀 우선, 비어있으면 API 자동 사용"],
+                ]);
+                ws2['!cols'] = [{ wch: 70 }];
+                XLSX.utils.book_append_sheet(wb, ws2, "작성요령");
+                XLSX.writeFile(wb, `선박제원_${centerCode || '템플릿'}.xlsx`);
+            };
+
+            // ── 센터 코드 저장 ─────────────────────────────────────────────
+            const saveCenterInfo = async () => {
+                const code = centerCodeInput.trim();
+                const name = centerNameInput.trim();
+                if (!/^\d{4}$/.test(code)) { setCenterSaveStatus('❌ 코드는 숫자 4자리여야 합니다'); setTimeout(() => setCenterSaveStatus(''), 3000); return; }
+                if (!name) { setCenterSaveStatus('❌ 센터 이름을 입력하세요'); setTimeout(() => setCenterSaveStatus(''), 3000); return; }
+                setCenterSaveStatus('저장 중...');
+                try {
+                    const res = await fetch(`${SUPABASE_URL}/rest/v1/centers`, {
+                        method: 'POST',
+                        headers: {
+                            'apikey': SUPABASE_ANON_KEY,
+                            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                            'Content-Type': 'application/json',
+                            'Prefer': 'resolution=merge-duplicates'
+                        },
+                        body: JSON.stringify({ center_code: code, center_name: name, updated_at: new Date().toISOString() })
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    localStorage.setItem('centerCode', code);
+                    localStorage.setItem('centerName', name);
+                    setCenterCode(code);
+                    setCenterName(name);
+                    setCenterSaveStatus(`✅ 저장됨 [${code}] ${name}`);
+                    setTimeout(() => setCenterSaveStatus(''), 4000);
+                } catch (err) {
+                    setCenterSaveStatus('❌ 오류: ' + err.message);
+                    setTimeout(() => setCenterSaveStatus(''), 4000);
+                }
+            };
+
+            // ── 센터 코드로 제원 불러오기 ──────────────────────────────────
+            const fetchSpecsByCenter = React.useCallback(async (code) => {
+                if (!code) return;
+                try {
+                    const res = await fetch(`${SUPABASE_URL}/rest/v1/vessel_specs?center_code=eq.${code}&select=*`, {
+                        headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
+                    });
+                    if (!res.ok) return;
+                    const rows = await res.json();
+                    const specs = {};
+                    rows.forEach(r => {
+                        specs[r.psnshp_cd.toUpperCase()] = {
+                            선명: r.vessel_name || '', 선사: r.company || '',
+                            항로구분: r.route_type || '', 톤수: r.tonnage || '',
+                            정원: r.capacity || '', 진수일: r.launch_date || '',
+                            속력: r.speed || '', 승무원: r.crew || '',
+                            적재량: r.cargo || '', 차량수: r.cars || '',
+                            검사종류: r.inspection_type || '', 검사만료: r.inspection_date || '',
+                            비고: r.remarks || ''
+                        };
+                    });
+                    localStorage.setItem('vesselSpecs', JSON.stringify(specs));
+                    setVesselSpecs(specs);
+                } catch (err) { console.warn('제원 로드 실패:', err); }
+            }, [SUPABASE_URL, SUPABASE_ANON_KEY]);
+
+            // 센터 코드 있으면 시작 시 자동 로드
+            React.useEffect(() => {
+                if (centerCode) fetchSpecsByCenter(centerCode);
+            }, [centerCode, fetchSpecsByCenter]);
+
+            // ── Excel 가져오기 ─────────────────────────────────────────────
+            const handleExcelImport = async (e) => {
+                const XLSX = window.XLSX;
+                if (!XLSX) { alert("SheetJS 라이브러리가 로드되지 않았습니다."); return; }
+                const file = e.target.files[0];
+                if (!file) return;
+                setExcelImportStatus('읽는 중...');
+                const reader = new FileReader();
+                reader.onload = async (ev) => {
+                    try {
+                        const wb = XLSX.read(ev.target.result, { type: 'array', cellDates: true });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+                        const specs = {};
+                        rows.forEach(row => {
+                            const cd = (row['선박코드'] || row['psnshp_cd'] || '').toString().trim().toUpperCase();
+                            if (!cd) return;
+                            const parseDate = (v) => {
+                                if (!v) return '';
+                                if (v instanceof Date) return v.toISOString().slice(0, 10);
+                                const s = v.toString().trim();
+                                if (/^\d{5}$/.test(s)) {
+                                    const d = XLSX.SSF.parse_date_code(Number(s));
+                                    if (d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+                                }
+                                return s;
+                            };
+                            specs[cd] = {
+                                선명: (row['선명'] || '').toString().trim(),
+                                선사: (row['선사명'] || row['선사'] || '').toString().trim(),
+                                항로구분: (row['항로구분'] || '').toString().trim(),
+                                톤수: (row['톤수(GT)'] || row['톤수'] || '').toString().trim(),
+                                정원: (row['정원'] || '').toString().trim(),
+                                진수일: parseDate(row['진수일']),
+                                속력: (row['속력(노트)'] || row['속력(knot)'] || row['속력'] || '').toString().trim(),
+                                승무원: (row['승무원'] || '').toString().trim(),
+                                적재량: (row['적재량(톤)'] || row['적재량'] || '').toString().trim(),
+                                차량수: (row['차량수'] || '').toString().trim(),
+                                검사종류: (row['검사종류'] || '').toString().trim(),
+                                검사만료: parseDate(row['검사만료']),
+                                비고: (row['비고'] || '').toString().trim(),
+                            };
+                        });
+                        localStorage.setItem('vesselSpecs', JSON.stringify(specs));
+                        setVesselSpecs(specs);
+                        const count = Object.keys(specs).length;
+                        // 센터 코드 있으면 Supabase에도 업로드
+                        if (centerCode) {
+                            setExcelImportStatus(`Supabase 업로드 중... (${count}척)`);
+                            try {
+                                const rows = Object.entries(specs).map(([cd, s]) => ({
+                                    center_code: centerCode, psnshp_cd: cd,
+                                    vessel_name: s.선명, company: s.선사, route_type: s.항로구분,
+                                    tonnage: s.톤수, capacity: s.정원, launch_date: s.진수일,
+                                    speed: s.속력, crew: s.승무원, cargo: s.적재량,
+                                    cars: s.차량수, inspection_type: s.검사종류, inspection_date: s.검사만료,
+                                    remarks: s.비고, updated_at: new Date().toISOString()
+                                }));
+                                const res = await fetch(`${SUPABASE_URL}/rest/v1/vessel_specs?on_conflict=center_code,psnshp_cd`, {
+                                    method: 'POST',
+                                    headers: {
+                                        'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                                        'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates'
+                                    },
+                                    body: JSON.stringify(rows)
+                                });
+                                if (!res.ok) throw new Error(await res.text());
+                                setExcelImportStatus(`✅ 완료: ${count}척 저장됨 (Supabase 동기화 완료)`);
+                            } catch (err) {
+                                setExcelImportStatus(`⚠️ 로컬 저장 완료 (Supabase 업로드 실패: ${err.message})`);
+                            }
+                        } else {
+                            setExcelImportStatus(`✅ 완료: ${count}척 로드됨 (센터 코드 미설정 → 로컬만 저장)`);
+                        }
+                        setTimeout(() => setExcelImportStatus(''), 5000);
+                    } catch (err) {
+                        setExcelImportStatus('오류: ' + err.message);
+                        setTimeout(() => setExcelImportStatus(''), 4000);
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+                e.target.value = '';
+            };
+
+            const applyLiveData = useCallback((raw) => {
+                if (!raw) {
+                    addApiLog("warn", "applyLiveData called with empty payload");
+                    return;
+                }
+
+                const apiData = Array.isArray(raw) ? raw : (raw.data || []);
+                const syncTime = raw.lastSync || "확인 불가";
+                setLastUpdate(syncTime);
+                setLiveData(apiData);
+                addApiLog("success", "api payload applied", {
+                    items: apiData.length,
+                    lastSync: syncTime
+                });
+
+                setVessels(prev => {
+                    let changed = false;
+                    const next = prev.map(v => {
+                        const match = apiData.find(a => {
+                            const apiCd = (a.psnshp_cd || "").toString().trim().toUpperCase();
+                            const localCd = (v.psnshp_cd || "").toString().trim().toUpperCase();
+                            const apiNm = (a.psnshp_nm || "").toString().trim().replace(/\s+/g, "");
+                            const localNm = (v.name || "").toString().trim().replace(/\s+/g, "");
+                            return (localCd !== "" && apiCd === localCd) || (localNm === apiNm);
+                        });
+
+                        if (!match) return v;
+
+                        const sLabel = (match.Status || "").toString().trim();
+                        let newStatus = 0;
+                        if (sLabel.includes("통제")) newStatus = 1;
+                        else if (sLabel.includes("비운")) newStatus = 2;
+
+                        const newRemarks = (match.Remarks || "").toString().trim();
+                        const newRoute = (match.Route || "").toString().trim();
+                        // 엑셀 항로구분 우선, 없으면 API seawy_se_nm에서 판단 (현재 API엔 보조구분 없음 → 항상 일반)
+                        const cdKey = (v.psnshp_cd || "").toUpperCase();
+                        const specs = vesselSpecs[cdKey] || {};
+                        const excelRouteType = (specs.항로구분 || "").trim();
+                        const newRouteType = excelRouteType === "보조" ? "보조" : "일반";
+                        const newInspectionType = specs.검사종류 || v.inspectionType || '';
+                        const newInspectionDate = specs.검사만료 || v.inspectionDate || '';
+
+                        const isStatusDiff = v.status !== newStatus;
+                        const isRemarksDiff = v.remarks !== newRemarks;
+                        const isRouteDiff = newRoute !== "" && v.route !== newRoute;
+                        const isRouteTypeDiff = v.routeType !== newRouteType;
+                        const isInspectionDiff = v.inspectionType !== newInspectionType || v.inspectionDate !== newInspectionDate;
+
+                        if (isStatusDiff || isRemarksDiff || isRouteDiff || isRouteTypeDiff || isInspectionDiff) {
+                            changed = true;
+                            return {
+                                ...v,
+                                status: newStatus,
+                                remarks: newRemarks,
+                                route: newRoute !== "" ? newRoute : v.route,
+                                routeType: newRouteType,
+                                inspectionType: newInspectionType,
+                                inspectionDate: newInspectionDate,
+                            };
+                        }
+                        return v;
+                    });
+                    return changed ? next : prev;
+                });
+            }, [addApiLog, vesselSpecs]);
+
+            // vesselSpecs 변경 시 vessels에 검사/항로구분 즉시 반영
+            useEffect(() => {
+                if (!vesselSpecs || Object.keys(vesselSpecs).length === 0) return;
+                setVessels(prev => {
+                    let changed = false;
+                    const next = prev.map(v => {
+                        const cdKey = (v.psnshp_cd || '').toString().trim().toUpperCase();
+                        const s = vesselSpecs[cdKey] || {};
+                        const newInspectionType = s.검사종류 || '';
+                        const newInspectionDate = s.검사만료 || '';
+                        const newRouteType = s.항로구분 === '보조' ? '보조' : s.항로구분 === '일반' ? '일반' : v.routeType;
+                        if (v.inspectionType !== newInspectionType || v.inspectionDate !== newInspectionDate || v.routeType !== newRouteType) {
+                            changed = true;
+                            return { ...v, inspectionType: newInspectionType, inspectionDate: newInspectionDate, routeType: newRouteType };
+                        }
+                        return v;
+                    });
+                    return changed ? next : prev;
+                });
+            }, [vesselSpecs]);
+
+            useEffect(() => {
+                window.applyLiveData = applyLiveData;
+                return () => {
+                    if (window.applyLiveData === applyLiveData) {
+                        delete window.applyLiveData;
+                    }
+                };
+            }, [applyLiveData]);
+
+            // 실시간 데이터 연동 (Supabase Realtime)
+            useEffect(() => {
+                const normalizeRow = (row) => ({
+                    psnshp_cd:       row.psnshp_cd       ?? row.PSNSHP_CD  ?? "",
+                    psnshp_nm:       row.psnshp_nm       ?? row.PSNSHP_NM  ?? row.name ?? "",
+                    Status:          row.Status          ?? row.status      ?? "",
+                    Remarks:         row.Remarks         ?? row.remarks     ?? "",
+                    seawy_se_nm:     row.seawy_se_nm     ?? "",
+                    Route:           row.Route           ?? row.route       ?? "",
+                    shpcpn_nm:       row.shpcpn_nm       ?? "",
+                    gt:              row.gt              ?? 0,
+                    pasngr_pscp_cnt: row.pasngr_pscp_cnt ?? 0,
+                    kdship_nm:       row.kdship_nm       ?? "",
+                });
+
+                // 초기 전체 로드
+                const initialLoad = async () => {
+                    const startedAt = Date.now();
+                    try {
+                        const res = await fetch(
+                            `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?select=*`,
+                            { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Accept": "application/json" } }
+                        );
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        const rows = await res.json();
+                        const data = rows.map(normalizeRow);
+                        const lastSync = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace("T", " ");
+                        applyLiveData({ data, lastSync });
+                        addApiLog("success", `초기 로드 완료 (${data.length}척)`, { source: "supabase", elapsedMs: Date.now() - startedAt });
+                    } catch (err) {
+                        addApiLog("error", `초기 로드 실패: ${err.message}`);
+                    }
+                };
+
+                // 단일 행 업데이트 (Realtime용 - liveData 병합, vessels 개별 갱신)
+                const applyRowUpdate = (row) => {
+                    const newRow = normalizeRow(row);
+                    const lastSync = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace("T", " ");
+                    setLastUpdate(lastSync);
+                    // liveData 병합 업데이트
+                    setLiveData(prev => {
+                        const idx = prev.findIndex(r => r.psnshp_cd === newRow.psnshp_cd);
+                        if (idx >= 0) { const next = [...prev]; next[idx] = newRow; return next; }
+                        return [...prev, newRow];
+                    });
+                    // vessels 상태 업데이트
+                    setVessels(prev => prev.map(v => {
+                        const apiCd = (newRow.psnshp_cd || "").trim().toUpperCase();
+                        const localCd = (v.psnshp_cd || "").trim().toUpperCase();
+                        const apiNm = (newRow.psnshp_nm || "").trim().replace(/\s+/g,"");
+                        const localNm = (v.name || "").trim().replace(/\s+/g,"");
+                        if (!((localCd && apiCd === localCd) || localNm === apiNm)) return v;
+                        const sLabel = (newRow.Status || "").trim();
+                        const newStatus = sLabel.includes("통제") ? 1 : sLabel.includes("비운") ? 2 : 0;
+                        const newRemarks = (newRow.Remarks || "").trim();
+                        const newRoute = (newRow.Route || "").trim();
+                        return { ...v, status: newStatus, remarks: newRemarks, route: newRoute || v.route };
+                    }));
+                };
+
+                initialLoad();
+
+                // Realtime 구독
+                const supabaseJs = window.supabase;
+                if (!supabaseJs) {
+                    addApiLog("warn", "Supabase JS 미로드 — 60초 폴링으로 대체");
+                    const timer = setInterval(initialLoad, 60000);
+                    return () => clearInterval(timer);
+                }
+
+                const client = supabaseJs.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                const channel = client.channel('vessel-status-rt')
+                    .on('postgres_changes',
+                        { event: 'INSERT', schema: 'public', table: SUPABASE_TABLE },
+                        ({ new: row }) => { applyRowUpdate(row); addApiLog("success", `Realtime INSERT: ${row.psnshp_nm}`, { source: "realtime" }); }
+                    )
+                    .on('postgres_changes',
+                        { event: 'UPDATE', schema: 'public', table: SUPABASE_TABLE },
+                        ({ new: row }) => { applyRowUpdate(row); addApiLog("success", `Realtime UPDATE: ${row.psnshp_nm}`, { source: "realtime" }); }
+                    )
+                    .on('postgres_changes',
+                        { event: 'DELETE', schema: 'public', table: SUPABASE_TABLE },
+                        ({ old: row }) => {
+                            setLiveData(prev => prev.filter(r => r.psnshp_cd !== row.psnshp_cd));
+                            addApiLog("success", `Realtime DELETE: ${row.psnshp_cd}`, { source: "realtime" });
+                        }
+                    )
+                    .subscribe((status) => {
+                        if (status === 'SUBSCRIBED') addApiLog("success", "✅ Realtime 연결됨 — 변경 시에만 수신", { source: "realtime" });
+                        else if (status === 'CHANNEL_ERROR') addApiLog("error", "Realtime 연결 오류", { source: "realtime" });
+                    });
+
+                return () => { client.removeChannel(channel); };
+            }, [SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_TABLE, applyLiveData, addApiLog]);
+
+            // ── 항로 기반 표시 모드 ────────────────────────────────────────
+            const uniqueApiRoutes = useMemo(() => {
+                const routes = liveData.map(v => v.Route).filter(Boolean);
+                return [...new Set(routes)].sort();
+            }, [liveData]);
+
+            const displayVessels = useMemo(() => {
+                if (selectedRoutes.length === 0) return vessels;
+                const result = [];
+                selectedRoutes.forEach(route => {
+                    const apiVessels = liveData.filter(v => v.Route === route);
+                    apiVessels.forEach(apiVessel => {
+                        const cd = (apiVessel.psnshp_cd || '').toString().trim().toUpperCase();
+                        const specs = vesselSpecs[cd];
+                        // 엑셀 우선, 비어있으면 API 사용
+                        const ex = (key) => specs?.[key] && specs[key] !== '' ? specs[key] : null;
+                        const company   = ex('선사')    || apiVessel.shpcpn_nm  || '(미등록)';
+                        const vesName   = ex('선명')    || apiVessel.psnshp_nm  || '';
+                        const tonnage   = parseFloat(ex('톤수'))   || Number(apiVessel.gt)              || 0;
+                        const capacity  = parseInt(ex('정원'))     || Number(apiVessel.pasngr_pscp_cnt) || 0;
+                        const routeType = ex('항로구분') === '보조' ? '보조' : '일반';
+                        result.push({
+                            id: `api_${cd}_${route}`,
+                            name: vesName,
+                            company: company,
+                            route: route,
+                            routeType: routeType,
+                            tonnage: tonnage,
+                            capacity: capacity,
+                            cargo: parseFloat(ex('적재량')) || 0,
+                            cars: parseInt(ex('차량수'))   || 0,
+                            launchDate: ex('진수일') || '',
+                            speed: parseFloat(ex('속력')) || 0,
+                            crew: parseInt(ex('승무원'))  || 0,
+                            inspectionType: ex('검사종류') || '',
+                            inspectionDate: ex('검사만료') || '',
+                            Status: apiVessel.Status || '',
+                            Remarks: (ex('비고') ? ex('비고') + ' ' : '') + (apiVessel.Remarks || ''),
+                            remarks: (ex('비고') ? ex('비고') + ' ' : '') + (apiVessel.Remarks || ''),
+                            psnshp_cd: apiVessel.psnshp_cd || '',
+                            status: (() => {
+                                const s = (apiVessel.Status || '').toString();
+                                if (s.includes('통제')) return 1;
+                                if (s.includes('비운')) return 2;
+                                return 0;
+                            })(),
+                            _noSpecs: !specs,
+                        });
+                    });
+                });
+                return result;
+            }, [selectedRoutes, liveData, vesselSpecs, vessels]);
+
+            // 통계 계산
+            const statsSummary = useMemo(() => {
+                const src = displayVessels;
+                const normalShips = src.filter(v => (v.routeType || "일반") === "일반");
+                const auxShips = src.filter(v => v.routeType === "보조");
+                return {
+                    totalV: src.length,
+                    totalR: new Set(src.map(v => v.route)).size,
+                    normalV: normalShips.length,
+                    normalR: new Set(normalShips.map(v => v.route)).size,
+                    auxV: auxShips.length,
+                    auxR: new Set(auxShips.map(v => v.route)).size
+                };
+            }, [displayVessels]);
+
+            // 회사 정렬 관리
+            useEffect(() => {
+                const groupedKeys = new Set(vessels.map(v => `${v.company}__${v.routeType || "일반"}`));
+                const currentKeys = new Set(companyOrder.map(o => o.key));
+                const missing = [...groupedKeys].filter(k => !currentKeys.has(k));
+                if (missing.length > 0) {
+                    setCompanyOrder(prev => [...prev, ...missing.map(k => ({ key: k, monitorId: 1 }))]);
+                }
+            }, [vessels, companyOrder]);
+
+            // 레이아웃 자동 계산
+            const recalcLayout = useCallback(() => {
+                if (!mainRef.current || !tableHeaderRef.current) return;
+                const h = mainRef.current.offsetHeight - tableHeaderRef.current.offsetHeight - 20;
+                const sourceVessels = displayVessels;
+                const grouped = sourceVessels.reduce((acc, v) => {
+                    const key = `${v.company}__${v.routeType || "일반"}`;
+                    if (!acc[key]) acc[key] = { vessels: [] };
+                    acc[key].vessels.push(v);
+                    return acc;
+                }, {});
+                const knownInOrder = new Set(companyOrder.map(o => o.key));
+                const myKeys = Object.keys(grouped).filter(k => {
+                    const assigned = companyOrder.find(o => o.key === k)?.monitorId;
+                    // companyOrder에 없으면 모니터1 기본값
+                    return (assigned !== undefined ? assigned : 1) === monitorId;
+                });
+                const rows = Math.ceil(myKeys.reduce((sum, k) => sum + grouped[k].vessels.length, 0) / columnCount) || 1;
+                const calculatedH = Math.max(30, Math.min(80, h / rows));
+                setRowHeight(calculatedH);
+                setFontScale(Math.max(1.0, Math.min(2.0, calculatedH / 32)));
+            }, [displayVessels, companyOrder, monitorId, columnCount, uiScale, statsScale, headerFontScale]);
+
+            useEffect(() => {
+                recalcLayout();
+                window.addEventListener('resize', recalcLayout);
+                return () => window.removeEventListener('resize', recalcLayout);
+            }, [recalcLayout]);
+
+            // 드래그 앤 드롭 로직
+            const moveCompanyOrder = (draggedKey, targetKey) => {
+                if (draggedKey === targetKey) return;
+                const now = Date.now();
+                if (now - lastMoveTimeRef.current < 40) return;
+                lastMoveTimeRef.current = now;
+                setCompanyOrder(prev => {
+                    const next = [...prev];
+                    const fromIdx = next.findIndex(o => o.key === draggedKey);
+                    const toIdx = next.findIndex(o => o.key === targetKey);
+                    if (fromIdx === -1 || toIdx === -1) return prev;
+                    const [moved] = next.splice(fromIdx, 1);
+                    next.splice(toIdx, 0, moved);
+                    broadcastState(vessels, next);
+                    return next;
+                });
+            };
+
+            const onDragStart = (e, key) => { 
+                setDraggedItem({ type: 'company', key }); 
+                e.dataTransfer.setData("itemData", JSON.stringify({ type: 'company', key }));
+            };
+            
+            const onDragOver = (e, targetKey) => { 
+                e.preventDefault(); 
+                if (draggedItem?.type === 'company') moveCompanyOrder(draggedItem.key, targetKey); 
+            };
+            
+            const onVesselDragStart = (e, id) => { 
+                setDraggedItem({ type: 'vessel', id }); 
+                e.dataTransfer.setData("itemData", JSON.stringify({ type: 'vessel', id }));
+            };
+
+            const onVesselDragOver = (e, targetId, targetCompany, targetRouteType) => { 
+                e.preventDefault(); 
+                if (draggedItem?.type === 'vessel' && draggedItem.id !== targetId) {
+                    setVessels(prev => {
+                        const next = [...prev];
+                        const fromIdx = next.findIndex(v => v.id === draggedItem.id);
+                        const toIdx = next.findIndex(v => v.id === targetId);
+                        if (fromIdx === -1 || toIdx === -1) return prev;
+                        const [moved] = next.splice(fromIdx, 1);
+                        moved.company = targetCompany;
+                        moved.routeType = targetRouteType;
+                        next.splice(toIdx, 0, moved);
+                        broadcastState(next, companyOrder);
+                        return next;
+                    });
+                }
+            };
+
+            const onDrop = (e) => {
+                e.preventDefault();
+                let data;
+                try { data = JSON.parse(e.dataTransfer.getData("itemData")); } catch (err) { return; }
+                if (data && data.type === 'company') {
+                    setCompanyOrder(prev => {
+                        const next = prev.map(o => o.key === data.key ? { ...o, monitorId } : o);
+                        broadcastState(vessels, next);
+                        return next;
+                    });
+                }
+                setDraggedItem(null);
+            };
+
+            // 컬럼 너비 조절
+            const onResizeStart = (e, key) => { e.preventDefault(); setResizing({ key, startX: e.clientX, startWidth: columnWidths[key] || 0 }); };
+            useEffect(() => {
+                if (!resizing) return;
+                const move = (e) => setColumnWidths(prev => ({ ...prev, [resizing.key]: Math.max(columnMinWidths[resizing.key] || 30, resizing.startWidth + (e.clientX - resizing.startX)) }));
+                const up = () => setResizing(null);
+                window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+                return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+            }, [resizing]);
+
+            // 수동 상태 관리
+            const onStatusToggle = (id) => setVessels(prev => {
+                const next = prev.map(v => v.id === id ? { ...v, status: (Number(v.status) + 1) % 3 } : v);
+                broadcastState(next, companyOrder);
+                return next;
+            });
+            
+            const onRemarkChange = (id, val) => setVessels(prev => {
+                const next = prev.map(v => v.id === id ? { ...v, remarks: val } : v);
+                broadcastState(next, companyOrder);
+                return next;
+            });
+
+            const forceSaveData = () => {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({ vessels, companyOrder, uiScale, columnCount, columnWidths, fontSizes, statsScale, headerFontScale, visibleColumns }));
+                setShowSaveMsg(true); setTimeout(() => setShowSaveMsg(false), 2000);
+            };
+
+            const handleSaveVessel = (e) => {
+                e.preventDefault();
+                const fd = new FormData(e.target);
+                const data = { 
+                    ...editingVessel, 
+                    psnshp_cd: fd.get('psnshp_cd'), 
+                    name: fd.get('name'), 
+                    company: fd.get('company'), 
+                    route: fd.get('route'), 
+                    routeType: fd.get('routeType'), 
+                    tonnage: Number(fd.get('tonnage')), 
+                    capacity: Number(fd.get('capacity')), 
+                    crew: Number(fd.get('crew')), 
+                    cargo: Number(fd.get('cargo')), 
+                    cars: Number(fd.get('cars')), 
+                    speed: Number(fd.get('speed')), 
+                    launchDate: fd.get('launchDate') 
+                };
+                setVessels(prev => {
+                    const next = editingVessel ? prev.map(v => v.id === editingVessel.id ? data : v) : [...prev, { ...data, id: Date.now() }];
+                    broadcastState(next, companyOrder);
+                    return next;
+                });
+                setIsModalOpen(false);
+            };
+
+            const handleBulkImport = () => {
+                const text = document.getElementById('bulkInput').value;
+                if (!text.trim()) return;
+                const lines = text.split('\n').filter(l => l.trim());
+                const newOnes = lines.map((l, i) => {
+                    const p = l.split(/[,\t]/).map(s => s.trim());
+                    return { id: Date.now() + i, company: p[0], route: p[1], name: p[2], psnshp_cd: p[3] || "", tonnage: parseFloat(p[4]) || 0, capacity: parseInt(p[5]) || 0, launchDate: p[6], speed: parseFloat(p[7]) || 0, routeType: p[8] || "일반", crew: parseInt(p[9]) || 0, cargo: parseFloat(p[10]) || 0, cars: parseInt(p[11]) || 0, remarks: "", status: 0 };
+                });
+                setVessels(prev => {
+                    const next = [...prev, ...newOnes];
+                    broadcastState(next, companyOrder);
+                    return next;
+                });
+                setIsBulkModalOpen(false);
+            };
+
+            const toggleColumn = (key) => {
+                setVisibleColumns(prev => {
+                    const next = { ...prev, [key]: !prev[key] };
+                    broadcastState(vessels, companyOrder, next);
+                    return next;
+                });
+            };
+
+            const { columnGroups } = useMemo(() => {
+                const grouped = displayVessels.reduce((acc, v) => {
+                    const key = `${v.company}__${v.routeType || "일반"}`;
+                    if (!acc[key]) acc[key] = { company: v.company, routeType: v.routeType || "일반", vessels: [], key };
+                    acc[key].vessels.push(v);
+                    return acc;
+                }, {});
+
+                // 항로 모드/일반 모드 동일하게 monitorId 필터링
+                const knownKeys = new Set(companyOrder.map(o => o.key));
+                const myOrderedKeys = companyOrder.filter(o => o.monitorId === monitorId && grouped[o.key]).map(o => o.key);
+                // companyOrder에 아직 없는 신규 그룹은 모니터1에 기본 배정
+                const newKeys = Object.keys(grouped).filter(k => !knownKeys.has(k));
+                const sorted = [
+                    ...myOrderedKeys.map(k => grouped[k]),
+                    ...(monitorId === 1 ? newKeys.map(k => grouped[k]) : [])
+                ].filter(Boolean);
+
+                const perCol = Math.ceil(sorted.length / columnCount) || 1;
+                return { columnGroups: Array.from({ length: columnCount }, (_, i) => sorted.slice(i * perCol, (i + 1) * perCol)) };
+            }, [displayVessels, companyOrder, monitorId, columnCount, selectedRoutes]);
+
+            const getApiLogColorClass = (level) => {
+                if (level === "success") return "text-emerald-300";
+                if (level === "warn") return "text-amber-300";
+                if (level === "error") return "text-red-300";
+                return "text-sky-300";
+            };
+
+            const headerStyle = (key) => ({
+                width: `${columnWidths[key]}px`,
+                minWidth: `${columnWidths[key]}px`,
+                maxWidth: `${columnWidths[key]}px`,
+                fontSize: `${10 * headerFontScale}px`,
+                display: visibleColumns[key] ? undefined : 'none'
+            });
+
+            const totalTableWidth = useMemo(() =>
+                Object.keys(columnWidths).reduce((sum, key) =>
+                    visibleColumns[key] ? sum + (columnWidths[key] || 0) : sum, 0
+                ), [columnWidths, visibleColumns]);
+
+            return (
+                <div className="h-screen w-screen bg-[#F0F4F8] flex flex-col overflow-hidden select-none" onDragOver={(e) => e.preventDefault()} onDrop={onDrop} style={{"--ui-scale": uiScale}}>
+                    {showSaveMsg && <div className="save-confirm-toast"><Icon name="check-circle" size={20} /> 모든 설정이 저장되었습니다.</div>}
+
+                    {/* ── 헤더: 그라디언트 ── */}
+                    <header className="bg-gradient-to-r from-[#002855] via-[#003F88] to-[#0062C5] text-white px-6 py-3 flex items-center justify-between shadow-lg z-10 shrink-0">
+                        <div className="flex items-center gap-5">
+                            <div className="shrink-0 bg-white rounded-full p-0.5 shadow-md" style={{height: '48px', width: '48px'}}>
+                                <img src="KOMSA-원형01_배경투명.png" alt="KOMSA" style={{height: '100%', width: '100%', objectFit: 'contain'}} />
+                            </div>
+                            <div>
+                                <div className="font-black tracking-widest leading-none" style={{fontSize: `${Math.round(18 * statsScale)}px`}}>여객선 현황판</div>
+                                <div className="text-blue-200 font-bold tracking-[0.25em] mt-0.5" style={{fontSize: '9px'}}>MARITIME MONITORING</div>
+                            </div>
+                            <div className="h-8 w-px bg-white/20 mx-2"></div>
+                            <div className="flex items-center gap-5" style={{fontSize: `${Math.round(14 * statsScale)}px`}}>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-blue-200 font-medium">일반:</span>
+                                    <span className="text-sky-300 font-black">{statsSummary.normalR}항로 {statsSummary.normalV}척</span>
+                                </div>
+                                <div className="flex items-center gap-2 border-l border-white/20 pl-5">
+                                    <span className="text-blue-200 font-medium">보조:</span>
+                                    <span className="text-emerald-300 font-black">{statsSummary.auxR}항로 {statsSummary.auxV}척</span>
+                                </div>
+                                <div className="flex items-center gap-2 border-l border-white/20 pl-5">
+                                    <span className="text-blue-200 font-medium">합계:</span>
+                                    <span className="text-white font-black">{statsSummary.totalR}항로 {statsSummary.totalV}척</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <div className="bg-black/20 px-3 py-1.5 rounded-full text-xs font-mono flex items-center gap-2 border border-white/10">
+                                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+                                갱신: <span className="text-emerald-300">{lastUpdate}</span>
+                            </div>
+                            <button onClick={() => setShowApiLogPanel(prev => !prev)} className={`p-2 rounded-lg transition-colors ${showApiLogPanel ? 'bg-white/20' : 'hover:bg-white/10'}`} title="API Log">
+                                <Icon name="activity" size={17}/>
+                            </button>
+                            <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="설정">
+                                <Icon name="settings" size={17}/>
+                            </button>
+                            <div className="h-6 w-px bg-white/20"></div>
+                            <button onClick={forceSaveData} className="bg-white/10 hover:bg-white/20 px-4 py-1.5 rounded-lg font-black border border-white/20 transition-all flex items-center gap-2" style={{fontSize: `${Math.round(12 * statsScale)}px`}}>
+                                <Icon name="save" size={15}/> 전체 저장
+                            </button>
+                        </div>
+                    </header>
+
+                    <main ref={mainRef} className="flex-1 overflow-hidden flex flex-col bg-[#F0F4F8] p-3 gap-3" style={{ "--row-height": `${rowHeight}px` }}>
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col flex-1 min-h-0">
+                            <div ref={tableHeaderRef} className="flex shrink-0" style={{ height: `${Math.max(24, Math.round(28 * headerFontScale))}px` }}>
+                                {Array.from({ length: columnCount }).map((_, i) => (
+                                    <div key={i} className={`bg-[#002855] h-full flex items-center flex-1 ${i > 0 ? 'border-l border-[#1e3a5f]' : ''}`}>
+                                        <table className="table-fixed text-slate-400 font-black" style={{width: `${totalTableWidth}px`, minWidth: `${totalTableWidth}px`}}>
+                                            <thead className="text-[10px] uppercase tracking-widest leading-none">
+                                                <tr>
+                                                    {visibleColumns.company && <th className="px-1 py-0.5 text-center text-blue-300 resizable-th" style={headerStyle('company')}>선사<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'company')} /></th>}
+                                                    {visibleColumns.name && <th className="px-1 py-0.5 text-center text-blue-400 resizable-th" style={headerStyle('name')}>선명<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'name')} /></th>}
+                                                    {visibleColumns.route && <th className="px-1 py-0.5 text-center resizable-th" style={headerStyle('route')}>항로<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'route')} /></th>}
+                                                    {visibleColumns.tonnage && <th className="px-1 py-0.5 text-center resizable-th" style={headerStyle('tonnage')}>톤수<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'tonnage')} /></th>}
+                                                    {visibleColumns.capacity && <th className="px-1 py-0.5 text-center resizable-th" style={headerStyle('capacity')}>정원<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'capacity')} /></th>}
+                                                    {visibleColumns.crew && <th className="px-1 py-0.5 text-center resizable-th text-amber-200" style={headerStyle('crew')}>승무<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'crew')} /></th>}
+                                                    {visibleColumns.cargo && <th className="px-1 py-0.5 text-center resizable-th text-blue-200" style={headerStyle('cargo')}>적재<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'cargo')} /></th>}
+                                                    {visibleColumns.cars && <th className="px-1 py-0.5 text-center resizable-th text-emerald-200" style={headerStyle('cars')}>차량<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'cars')} /></th>}
+                                                    {visibleColumns.launchDate && <th className="px-1 py-0.5 text-center resizable-th" style={headerStyle('launchDate')}>진수<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'launchDate')} /></th>}
+                                                    {visibleColumns.speed && <th className="px-1 py-0.5 text-center resizable-th" style={headerStyle('speed')}>속력<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'speed')} /></th>}
+                                                    {visibleColumns.age && <th className="px-1 py-0.5 text-center resizable-th" style={headerStyle('age')}>선령<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'age')} /></th>}
+                                                    {visibleColumns.inspection && <th className="px-1 py-0.5 text-center resizable-th" style={headerStyle('inspection')}>검사만료<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'inspection')} /></th>}
+                                                    {visibleColumns.remarks && <th className="px-1 py-0.5 text-left resizable-th" style={headerStyle('remarks')}>비고<div className="col-resizer" onMouseDown={(e) => onResizeStart(e, 'remarks')} /></th>}
+                                                </tr>
+                                            </thead>
+                                        </table>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="flex-1 grid overflow-hidden" style={{ gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))` }}>
+                                {columnGroups.map((groupList, idx) => (
+                                    <div key={idx} className={`overflow-y-auto bg-white scrollbar-hide ${idx > 0 ? 'border-l border-slate-300' : ''}`}>
+                                        {groupList.map((g) => (
+                                            <GroupItem
+                                                key={g.key} group={g} onEdit={(v) => { setEditingVessel(v); setIsModalOpen(true); }}
+                                                onCompanyDragStart={onDragStart} onDragOver={onDragOver} onDrop={onDrop} draggedItem={draggedItem}
+                                                columnWidths={columnWidths} fontSizes={fontSizes} fontScale={fontScale} uiScale={uiScale}
+                                                onVesselDragStart={onVesselDragStart} onVesselDragOver={onVesselDragOver} onVesselDrop={onDrop}
+                                                onStatusToggle={onStatusToggle} onRemarkChange={onRemarkChange} isEditMode={isEditMode}
+                                                visibleColumns={visibleColumns} totalTableWidth={totalTableWidth}
+                                            />
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+
+                        </div>
+                    </main>
+
+                    {showApiLogPanel && (
+                        <div className="fixed right-3 bottom-3 z-[110] w-[420px] max-w-[96vw] h-80 bg-slate-950/95 text-slate-200 border border-slate-700 rounded-xl shadow-2xl flex flex-col">
+                            <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between">
+                                <div className="font-black text-xs uppercase tracking-wider text-blue-300">API Sync Log</div>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => setApiLogs([])} className="text-[10px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600">Clear</button>
+                                    <button onClick={() => setShowApiLogPanel(false)} className="p-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600">
+                                        <Icon name="x" size={12} />
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2 space-y-1 font-mono text-[11px]">
+                                {apiLogs.length === 0 ? (
+                                    <div className="text-slate-400 px-2 py-2">No API logs yet.</div>
+                                ) : apiLogs.map(log => (
+                                    <div key={log.id} className="bg-slate-900/90 border border-slate-800 rounded px-2 py-1">
+                                        <div className="flex items-center gap-2">
+                                            <span className={`uppercase text-[10px] font-black ${getApiLogColorClass(log.level)}`}>{log.level}</span>
+                                            <span className="text-slate-500">{log.ts}</span>
+                                            <span className="text-slate-200">{log.message}</span>
+                                        </div>
+                                        {log.extra && (
+                                            <pre className="mt-1 text-[10px] text-slate-400 whitespace-pre-wrap break-all">{JSON.stringify(log.extra)}</pre>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {showSettings && (
+                        <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4" onClick={() => setShowSettings(false)}>
+                            <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden text-slate-800 max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                                <div className="bg-[#002855] px-6 py-4 flex items-center justify-between shrink-0">
+                                    <div className="flex items-center gap-2 text-white font-black tracking-wider text-sm">
+                                        <Icon name="settings" size={16} className="text-blue-300"/> 프로그램 설정
+                                    </div>
+                                    <button onClick={() => setShowSettings(false)} className="text-white/60 hover:text-white transition-colors">
+                                        <Icon name="x" size={18}/>
+                                    </button>
+                                </div>
+                                <div className="p-6 space-y-6 overflow-y-auto flex-1">
+                                    {/* 센터 코드 설정 */}
+                                    <div>
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Icon name="shield" size={13}/> 센터 코드
+                                        </h4>
+                                        {centerCode && (
+                                            <div className="mb-3 px-4 py-2 bg-blue-50 border border-blue-200 rounded-xl flex items-center gap-2">
+                                                <Icon name="check-circle" size={14} className="text-blue-500"/>
+                                                <span className="text-sm font-black text-blue-700">[{centerCode}]</span>
+                                                <span className="text-sm text-blue-600">{centerName}</span>
+                                            </div>
+                                        )}
+                                        <div className="flex gap-2 mb-2">
+                                            <input
+                                                type="text" maxLength={4} placeholder="코드 4자리"
+                                                value={centerCodeInput}
+                                                onChange={e => setCenterCodeInput(e.target.value.replace(/\D/g,'').slice(0,4))}
+                                                className="w-28 px-3 py-2 border border-slate-200 rounded-xl text-sm font-black text-center outline-none focus:border-blue-400"
+                                            />
+                                            <input
+                                                type="text" placeholder="센터 이름 (예: 목포센터)"
+                                                value={centerNameInput}
+                                                onChange={e => setCenterNameInput(e.target.value)}
+                                                className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm outline-none focus:border-blue-400"
+                                            />
+                                            <button onClick={saveCenterInfo} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-colors">
+                                                저장
+                                            </button>
+                                        </div>
+                                        {centerSaveStatus && (
+                                            <div className={`px-3 py-2 rounded-lg text-xs font-bold ${centerSaveStatus.startsWith('❌') ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'}`}>
+                                                {centerSaveStatus}
+                                            </div>
+                                        )}
+                                        <p className="mt-2 text-xs text-slate-400">같은 코드를 입력하면 모든 PC에 동일한 제원이 적용됩니다</p>
+                                    </div>
+                                    {/* 모니터 & 편집모드 */}
+                                    <div>
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Icon name="monitor" size={13}/> 모니터 / 편집 모드
+                                        </h4>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 gap-3">
+                                                <Icon name="monitor" size={15} className="text-slate-500 shrink-0"/>
+                                                <span className="text-sm font-bold text-slate-700">모니터</span>
+                                                <select value={monitorId} onChange={(e) => setMonitorId(Number(e.target.value))} className="ml-auto bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm font-black outline-none">
+                                                    {[1, 2, 3].map(n => <option key={n} value={n}>{n}번</option>)}
+                                                </select>
+                                            </div>
+                                            <button
+                                                onClick={() => setIsEditMode(prev => !prev)}
+                                                className={`flex items-center justify-between px-4 py-3 rounded-xl border-2 font-bold text-sm transition-all ${isEditMode ? 'bg-amber-50 border-amber-400 text-amber-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <Icon name="edit-3" size={15}/>
+                                                    {isEditMode ? '편집 중' : '편집 모드'}
+                                                </div>
+                                                <div className={`w-10 h-5 rounded-full transition-all ${isEditMode ? 'bg-amber-400' : 'bg-slate-300'} relative`}>
+                                                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${isEditMode ? 'left-5' : 'left-0.5'}`}></div>
+                                                </div>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    {/* 기타 기능 */}
+                                    <div className="border-t pt-5">
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Icon name="tool" size={13}/> 기타 기능
+                                        </h4>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <button onClick={() => window.open(window.location.href, '_blank')} className="flex items-center gap-2 px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 transition-colors">
+                                                <Icon name="external-link" size={15} className="text-slate-500"/> 새 창 열기
+                                            </button>
+                                            <button onClick={() => { setShowSettings(false); setIsBulkModalOpen(true); }} className="flex items-center gap-2 px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 transition-colors">
+                                                <Icon name="list-plus" size={15} className="text-slate-500"/> 일괄 등록
+                                            </button>
+                                            <button onClick={() => { setShowSettings(false); setEditingVessel(null); setIsModalOpen(true); }} className="flex items-center gap-2 px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 transition-colors">
+                                                <Icon name="plus" size={15} className="text-sky-500"/> 선박 추가
+                                            </button>
+                                        </div>
+                                    </div>
+                                    {/* 엑셀 제원 관리 */}
+                                    <div className="border-t pt-5">
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Icon name="table" size={13}/> 선박 제원 (Excel)
+                                        </h4>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <button onClick={downloadExcelTemplate} className="flex items-center gap-2 px-4 py-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-sm font-bold text-emerald-700 transition-colors">
+                                                <Icon name="file-down" size={15} className="text-emerald-500"/> 템플릿 다운로드
+                                            </button>
+                                            <label className="flex items-center gap-2 px-4 py-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-sm font-bold text-blue-700 transition-colors cursor-pointer">
+                                                <Icon name="file-up" size={15} className="text-blue-500"/> 엑셀 가져오기
+                                                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleExcelImport} />
+                                            </label>
+                                        </div>
+                                        {excelImportStatus && (
+                                            <div className={`mt-2 px-3 py-2 rounded-lg text-xs font-bold ${excelImportStatus.startsWith('오류') ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'}`}>
+                                                {excelImportStatus}
+                                            </div>
+                                        )}
+                                        <div className="mt-2 text-xs text-slate-400">
+                                            현재 등록된 제원: <span className="font-black text-slate-600">{Object.keys(vesselSpecs).length}척</span>
+                                        </div>
+                                    </div>
+                                    {/* API 항로 선택 */}
+                                    <div className="border-t pt-5">
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Icon name="navigation" size={13}/> API 항로 기반 표시
+                                        </h4>
+                                        <button
+                                            onClick={() => setShowRouteSelector(true)}
+                                            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 font-bold text-sm transition-all ${selectedRoutes.length > 0 ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <Icon name="route" size={15}/>
+                                                항로 선택
+                                            </div>
+                                            <span className={`text-xs px-2 py-1 rounded-full font-black ${selectedRoutes.length > 0 ? 'bg-indigo-200 text-indigo-800' : 'bg-slate-200 text-slate-600'}`}>
+                                                {selectedRoutes.length > 0 ? `${selectedRoutes.length}개 선택됨` : '수동 모드'}
+                                            </span>
+                                        </button>
+                                        {selectedRoutes.length > 0 && (
+                                            <button
+                                                onClick={() => { setSelectedRoutes([]); localStorage.setItem('selectedRoutes', '[]'); }}
+                                                className="mt-2 w-full text-xs text-slate-400 hover:text-red-500 py-1 transition-colors font-bold"
+                                            >
+                                                선택 초기화 (수동 모드로 복귀)
+                                            </button>
+                                        )}
+                                    </div>
+                                    {/* 표출 항목 */}
+                                    <div className="border-t pt-5">
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Icon name="check-square" size={13}/> 표출 항목 설정
+                                        </h4>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {Object.keys(COLUMN_LABELS).map(key => (
+                                                <button
+                                                    key={key}
+                                                    onClick={() => toggleColumn(key)}
+                                                    className={`px-3 py-2 rounded-lg text-xs font-bold border transition-all flex items-center justify-between ${visibleColumns[key] ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-400'}`}
+                                                >
+                                                    {COLUMN_LABELS[key]}
+                                                    {visibleColumns[key] ? <Icon name="eye" size={12}/> : <Icon name="eye-off" size={12}/>}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    {/* 텍스트 크기 조절 */}
+                                    <div className="border-t pt-5">
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Icon name="type" size={13}/> 텍스트 크기 조절
+                                        </h4>
+                                        <div className="space-y-2">
+                                            <div className="flex items-center bg-slate-100 rounded-xl px-4 py-3 gap-4 border border-slate-200 font-black">
+                                                <button type="button" onClick={() => setStatsScale(prev => Math.max(0.7, prev - 0.1))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><Icon name="minus" size={16}/></button>
+                                                <div className="flex-1 text-center text-blue-600">제목행: {Math.round(statsScale * 100)}%</div>
+                                                <button type="button" onClick={() => setStatsScale(prev => Math.min(2.5, prev + 0.1))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><Icon name="plus" size={16}/></button>
+                                            </div>
+                                            <div className="flex items-center bg-slate-100 rounded-xl px-4 py-3 gap-4 border border-slate-200 font-black">
+                                                <button type="button" onClick={() => setHeaderFontScale(prev => Math.max(0.7, prev - 0.1))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><Icon name="minus" size={16}/></button>
+                                                <div className="flex-1 text-center text-blue-600">헤더행: {Math.round(headerFontScale * 100)}%</div>
+                                                <button type="button" onClick={() => setHeaderFontScale(prev => Math.min(2.5, prev + 0.1))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><Icon name="plus" size={16}/></button>
+                                            </div>
+                                            <div className="flex items-center bg-slate-100 rounded-xl px-4 py-3 gap-4 border border-slate-200 font-black">
+                                                <button type="button" onClick={() => setUiScale(prev => Math.max(0.5, prev - 0.1))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><Icon name="minus" size={16}/></button>
+                                                <div className="flex-1 text-center text-blue-600">데이터행: {Math.round(uiScale * 100)}%</div>
+                                                <button type="button" onClick={() => setUiScale(prev => Math.min(2.0, prev + 0.1))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><Icon name="plus" size={16}/></button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {/* 화면 분할 */}
+                                    <div className="border-t pt-5">
+                                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                                            <Icon name="layout" size={13}/> 화면 분할
+                                        </h4>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setColumnCount(1)} className={`flex-1 py-3 rounded-xl font-black text-sm ${columnCount === 1 ? 'bg-[#002855] text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>1단</button>
+                                            <button onClick={() => setColumnCount(2)} className={`flex-1 py-3 rounded-xl font-black text-sm ${columnCount === 2 ? 'bg-[#002855] text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>2단</button>
+                                            <button onClick={() => setColumnCount(3)} className={`flex-1 py-3 rounded-xl font-black text-sm ${columnCount === 3 ? 'bg-[#002855] text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>3단</button>
+                                        </div>
+                                    </div>
+                                    {/* 설정 내보내기/불러오기 */}
+                                    <div className="border-t pt-5 space-y-2">
+                                        <button onClick={() => { const blob = new Blob([JSON.stringify({ vessels, companyOrder, columnWidths, fontSizes, uiScale, statsScale, headerFontScale, visibleColumns }, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `목포항_운항현황_백업.json`; a.click(); URL.revokeObjectURL(url); }} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-black text-sm flex items-center justify-center gap-2 shadow-md transition-all">
+                                            <Icon name="download" size={16}/> 설정 파일 내보내기
+                                        </button>
+                                        <label className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-lg font-black text-sm flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all">
+                                            <Icon name="upload" size={16}/> 설정 파일 불러오기
+                                            <input type="file" accept=".json" className="hidden" onChange={(e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (ev) => { try { const parsed = JSON.parse(ev.target.result); setVessels(parsed.vessels); setCompanyOrder(parsed.companyOrder); if(parsed.statsScale) setStatsScale(parsed.statsScale); if(parsed.headerFontScale) setHeaderFontScale(parsed.headerFontScale); if(parsed.uiScale) setUiScale(parsed.uiScale); setVisibleColumns(parsed.visibleColumns || visibleColumns); alert("복구 성공. [전체 저장]을 눌러주세요."); } catch (err) { alert("잘못된 파일입니다."); } }; reader.readAsText(file); }} />
+                                        </label>
+                                    </div>
+                                </div>
+                                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
+                                    <button onClick={() => setShowSettings(false)} className="px-6 py-2 bg-[#002855] hover:bg-[#003F88] text-white rounded-lg text-sm font-black transition-colors">
+                                        닫기
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showRouteSelector && (
+                        <div className="fixed inset-0 bg-black/70 z-[120] flex items-center justify-center p-4" onClick={() => setShowRouteSelector(false)}>
+                            <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="bg-indigo-700 px-6 py-4 text-white flex items-center justify-between">
+                                    <div className="font-black tracking-wider text-sm flex items-center gap-2">
+                                        <Icon name="route" size={16}/> API 항로 선택
+                                    </div>
+                                    <button onClick={() => setShowRouteSelector(false)} className="text-white/70 hover:text-white transition-colors">
+                                        <Icon name="x" size={18}/>
+                                    </button>
+                                </div>
+                                <div className="p-5">
+                                    <div className="flex gap-2 mb-4">
+                                        <button
+                                            onClick={() => setSelectedRoutes([...uniqueApiRoutes])}
+                                            className="flex-1 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-lg text-sm font-black transition-colors"
+                                        >전체 선택</button>
+                                        <button
+                                            onClick={() => setSelectedRoutes([])}
+                                            className="flex-1 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg text-sm font-black transition-colors"
+                                        >전체 해제</button>
+                                    </div>
+                                    {uniqueApiRoutes.length === 0 ? (
+                                        <div className="text-center py-8 text-slate-400 text-sm">
+                                            <Icon name="wifi-off" size={32} className="mx-auto mb-2 opacity-40"/>
+                                            <div>API 데이터를 수신하면 항로 목록이 표시됩니다.</div>
+                                        </div>
+                                    ) : (
+                                        <div className="max-h-64 overflow-y-auto space-y-1">
+                                            {uniqueApiRoutes.map(route => {
+                                                const checked = selectedRoutes.includes(route);
+                                                const vesselCount = liveData.filter(v => v.Route === route).length;
+                                                return (
+                                                    <button
+                                                        key={route}
+                                                        onClick={() => {
+                                                            setSelectedRoutes(prev =>
+                                                                prev.includes(route)
+                                                                    ? prev.filter(r => r !== route)
+                                                                    : [...prev, route]
+                                                            );
+                                                        }}
+                                                        className={`w-full flex items-center justify-between px-4 py-2.5 rounded-lg border text-sm font-bold transition-all ${checked ? 'bg-indigo-50 border-indigo-300 text-indigo-800' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+                                                    >
+                                                        <div className="flex items-center gap-3">
+                                                            <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${checked ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300'}`}>
+                                                                {checked && <Icon name="check" size={10} className="text-white"/>}
+                                                            </div>
+                                                            <span>{route}</span>
+                                                        </div>
+                                                        <span className={`text-xs px-2 py-0.5 rounded-full ${checked ? 'bg-indigo-200 text-indigo-700' : 'bg-slate-200 text-slate-500'}`}>{vesselCount}척</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="px-5 pb-5 flex gap-2">
+                                    <button
+                                        onClick={() => setShowRouteSelector(false)}
+                                        className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-sm font-black transition-colors"
+                                    >취소</button>
+                                    <button
+                                        onClick={() => {
+                                            localStorage.setItem('selectedRoutes', JSON.stringify(selectedRoutes));
+                                            setShowRouteSelector(false);
+                                        }}
+                                        className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-black transition-colors"
+                                    >저장 및 적용</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {isBulkModalOpen && (
+                        <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4">
+                            <div className="bg-white rounded-xl w-full max-w-2xl h-4/5 flex flex-col shadow-2xl overflow-hidden">
+                                <div className="bg-indigo-700 p-4 text-white flex justify-between font-black uppercase tracking-widest">
+                                    <h3>일괄 데이터 등록</h3>
+                                    <button onClick={() => setIsBulkModalOpen(false)}><Icon name="x" size={24}/></button>
+                                </div>
+                                <div className="p-4 flex-1 flex flex-col gap-4 overflow-hidden">
+                                    <textarea id="bulkInput" className="flex-1 w-full bg-slate-50 border-2 rounded-xl p-4 text-sm font-mono outline-none" placeholder="탭 또는 쉼표 구분: 선사, 항로, 선명, 선박코드, 톤수, 정원, 진수일, 속력, 구분, 승무원, 적재량, 차량..."></textarea>
+                                    <button onClick={handleBulkImport} className="bg-indigo-600 text-white font-black py-4 rounded-xl text-lg shadow-xl active:scale-95 transition-all">반영하기</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {isModalOpen && (
+                        <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4" onClick={() => setIsModalOpen(false)}>
+                            <form onSubmit={handleSaveVessel} onClick={e => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden font-bold text-slate-800">
+                                <div className="bg-slate-900 p-4 text-white flex justify-between font-black border-b-4 border-blue-600 uppercase">
+                                    <h3>{editingVessel ? "선박 제원 상세 수정" : "새 선박 추가"}</h3>
+                                    <button type="button" onClick={() => setIsModalOpen(false)}><Icon name="x" size={24}/></button>
+                                </div>
+                                <div className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+                                    <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black uppercase">선사명</label><input name="company" defaultValue={editingVessel?.company} required className="w-full border-b py-1 text-lg font-black outline-none" /></div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">선명</label><input name="name" defaultValue={editingVessel?.name} required className="w-full border-b py-1 outline-none" /></div>
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">선박 코드</label><input name="psnshp_cd" defaultValue={editingVessel?.psnshp_cd} className="w-full border-b py-1 outline-none font-mono text-blue-600" /></div>
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">항로</label><input name="route" defaultValue={editingVessel?.route} required className="w-full border-b py-1 outline-none" /></div>
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">구분</label><select name="routeType" defaultValue={editingVessel?.routeType || "일반"} className="w-full border-b py-1 outline-none"><option value="일반">일반</option><option value="보조">보조</option></select></div>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-4 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">톤수</label><input name="tonnage" type="number" step="0.1" defaultValue={editingVessel?.tonnage} className="w-full border-b py-1 outline-none bg-transparent" /></div>
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">정원</label><input name="capacity" type="number" defaultValue={editingVessel?.capacity} className="w-full border-b py-1 outline-none bg-transparent" /></div>
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">승무원</label><input name="crew" type="number" defaultValue={editingVessel?.crew} className="w-full border-b py-1 outline-none bg-transparent" /></div>
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">적재량</label><input name="cargo" type="number" step="0.1" defaultValue={editingVessel?.cargo} className="w-full border-b py-1 outline-none bg-transparent" /></div>
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">차량</label><input name="cars" type="number" defaultValue={editingVessel?.cars} className="w-full border-b py-1 outline-none bg-transparent" /></div>
+                                        <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">속력</label><input name="speed" type="number" step="0.1" defaultValue={editingVessel?.speed} className="w-full border-b py-1 outline-none bg-transparent" /></div>
+                                    </div>
+                                    <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">진수일</label><input name="launchDate" type="date" defaultValue={editingVessel?.launchDate} required className="w-full border-b py-1 outline-none text-sm" /></div>
+                                    <div className="space-y-1"><label className="text-[10px] text-slate-400 font-black">비고</label><input name="remarks" defaultValue={editingVessel?.remarks || ""} className="w-full border-b py-1 outline-none" /></div>
+                                    <div className="flex gap-2 pt-2">
+                                        {editingVessel && (
+                                            <button type="button" onClick={() => { if(confirm("삭제하시겠습니까?")) { const next = vessels.filter(v => v.id !== editingVessel.id); setVessels(next); broadcastState(next, companyOrder); setIsModalOpen(false); } }} className="px-4 py-3 rounded-xl bg-red-50 text-red-600 font-black border-2 border-red-100 transition-all"><Icon name="trash-2" size={18} /></button>
+                                        )}
+                                        <button type="submit" className="flex-1 bg-blue-600 text-white font-black py-3 rounded-xl text-lg shadow-xl active:scale-95 transition-all">저장 및 적용</button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+    <script>
+  window.addEventListener("liveDataUpdated", () => {
+    // window.latestVesselData 값을 반영하는 코드가 이미 있다면 자동으로 갱신됨
+    // 없으면 아래처럼 직접 갱신 함수 호출을 넣어줄 수 있음
+    if (window.applyLiveData) window.applyLiveData(window.latestVesselData);
+  });
+</script>
+</body>
+</html>
