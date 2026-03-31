@@ -77,21 +77,16 @@
         const { useState, useMemo, useCallback, useEffect, useRef, startTransition } = React;
 
         const Icon = ({ name, size = 16, className = "" }) => {
-            const svgHtml = useMemo(() => {
-                if (!window.lucide) return null;
-                const tmp = document.createElement('div');
-                const el = document.createElement('i');
-                el.setAttribute('data-lucide', name);
-                tmp.appendChild(el);
-                window.lucide.createIcons({ el: tmp });
-                const svg = tmp.querySelector('svg');
-                if (!svg) return null;
-                svg.setAttribute('width', size);
-                svg.setAttribute('height', size);
-                return svg.outerHTML;
-            }, [name, size]);
-            if (!svgHtml) return <span style={{width:size,height:size,display:'inline-block',flexShrink:0}}/>;
-            return <span dangerouslySetInnerHTML={{__html: svgHtml}} className={className} style={{display:'inline-flex',alignItems:'center',lineHeight:0,flexShrink:0}}/>;
+            const iconKey = name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+            const iconData = window.lucide?.[iconKey];
+            if (!iconData) return <span style={{width:size,height:size,display:'inline-block',flexShrink:0}}/>;
+            return (
+                <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"
+                    className={className} style={{flexShrink:0}}>
+                    {iconData.map(([tag, attrs], i) => React.createElement(tag, {...attrs, key: i}))}
+                </svg>
+            );
         };
 
         const calculateAge = (launchDateStr) => {
