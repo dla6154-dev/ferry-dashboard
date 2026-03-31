@@ -927,15 +927,15 @@
                 };
             }, [displayVessels]);
 
-            // 회사 정렬 관리
+            // 회사 정렬 관리 (displayVessels 기준 - API 선사도 포함)
             useEffect(() => {
-                const groupedKeys = new Set(vessels.map(v => `${v.company}__${v.routeType || "일반"}`));
+                const groupedKeys = new Set(displayVessels.map(v => `${v.company}__${v.routeType || "일반"}`));
                 const currentKeys = new Set(companyOrder.map(o => o.key));
                 const missing = [...groupedKeys].filter(k => !currentKeys.has(k));
                 if (missing.length > 0) {
                     setCompanyOrder(prev => [...prev, ...missing.map(k => ({ key: k, monitorId: 1 }))]);
                 }
-            }, [vessels, companyOrder]);
+            }, [displayVessels, companyOrder]);
 
             // 레이아웃 자동 계산
             const recalcLayout = useCallback(() => {
