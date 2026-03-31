@@ -74,7 +74,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useMemo, useCallback, useEffect, useRef } = React;
+        const { useState, useMemo, useCallback, useEffect, useRef, startTransition } = React;
 
         const Icon = ({ name, size = 16, className = "" }) => {
             useEffect(() => {
@@ -1586,11 +1586,11 @@
                                 <div className="p-5">
                                     <div className="flex gap-2 mb-4">
                                         <button
-                                            onClick={() => setSelectedRoutes([...uniqueApiRoutes])}
+                                            onClick={() => startTransition(() => setSelectedRoutes([...uniqueApiRoutes]))}
                                             className="flex-1 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-lg text-sm font-black transition-colors"
                                         >전체 선택</button>
                                         <button
-                                            onClick={() => setSelectedRoutes([])}
+                                            onClick={() => startTransition(() => setSelectedRoutes([]))}
                                             className="flex-1 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-lg text-sm font-black transition-colors"
                                         >전체 해제</button>
                                     </div>
@@ -1607,12 +1607,15 @@
                                                 return (
                                                     <button
                                                         key={route}
-                                                        onClick={() => {
-                                                            setSelectedRoutes(prev =>
-                                                                prev.includes(route)
-                                                                    ? prev.filter(r => r !== route)
-                                                                    : [...prev, route]
-                                                            );
+                                                        onClick={(e) => {
+                                                            if (e.detail > 1) return;
+                                                            startTransition(() => {
+                                                                setSelectedRoutes(prev =>
+                                                                    prev.includes(route)
+                                                                        ? prev.filter(r => r !== route)
+                                                                        : [...prev, route]
+                                                                );
+                                                            });
                                                         }}
                                                         className={`w-full flex items-center justify-between px-4 py-2.5 rounded-lg border text-sm font-bold transition-all ${checked ? 'bg-indigo-50 border-indigo-300 text-indigo-800' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'}`}
                                                     >
