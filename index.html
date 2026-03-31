@@ -696,8 +696,8 @@
 
                         const sLabel = (match.Status || "").toString().trim();
                         let newStatus = 0;
-                        if (sLabel.includes("통제")) newStatus = 1;
-                        else if (sLabel.includes("비운")) newStatus = 2;
+                        if (sLabel === "통제") newStatus = 1;
+                        else if (sLabel === "비운항") newStatus = 2;
 
                         const newRemarks = (match.Remarks || "").toString().trim();
                         const newRoute = (match.Route || "").toString().trim();
@@ -816,7 +816,7 @@
                         const localNm = (v.name || "").trim().replace(/\s+/g,"");
                         if (!((localCd && apiCd === localCd) || localNm === apiNm)) return v;
                         const sLabel = (newRow.Status || "").trim();
-                        const newStatus = sLabel.includes("통제") ? 1 : sLabel.includes("비운") ? 2 : 0;
+                        const newStatus = (sLabel === "통제") ? 1 : (sLabel === "비운항") ? 2 : 0;
                         const newRemarks = (newRow.Remarks || "").trim();
                         const newRoute = (newRow.Route || "").trim();
                         return { ...v, status: newStatus, remarks: newRemarks, route: newRoute || v.route };
@@ -900,8 +900,8 @@
                             psnshp_cd: apiVessel.psnshp_cd || '',
                             status: (() => {
                                 const s = (apiVessel.Status || '').toString();
-                                if (s.includes('통제')) return 1;
-                                if (s.includes('비운')) return 2;
+                                if (s === '통제') return 1;
+                                if (s === '비운항') return 2;
                                 return 0;
                             })(),
                             _noSpecs: !specs,
