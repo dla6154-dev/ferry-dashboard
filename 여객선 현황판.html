@@ -1008,23 +1008,7 @@
                         });
                     });
                 });
-                // 같은 선박코드+선사 그룹 내 중복 제거 (다항로 운항 선박: 항로명 합치기)
-                const deduped = [];
-                const seen = new Map();
-                result.forEach(v => {
-                    const key = `${v.psnshp_cd}__${v.company}__${v.routeType}`;
-                    if (seen.has(key)) {
-                        const ex = deduped[seen.get(key)];
-                        if (!ex.route.split('/').includes(v.route)) ex.route = ex.route + '/' + v.route;
-                        if (v.status > ex.status) ex.status = v.status;
-                        if (v.Remarks && !ex.Remarks.includes(v.Remarks)) ex.Remarks = (ex.Remarks + ' ' + v.Remarks).trim();
-                        if (v.remarks && !ex.remarks.includes(v.remarks)) ex.remarks = (ex.remarks + ' ' + v.remarks).trim();
-                    } else {
-                        seen.set(key, deduped.length);
-                        deduped.push({ ...v });
-                    }
-                });
-                return deduped;
+                return result;
             }, [selectedRoutes, liveData, vesselSpecs, vessels]);
 
             // 통계 계산
