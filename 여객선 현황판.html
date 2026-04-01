@@ -426,6 +426,7 @@
             const lastMoveTimeRef = useRef(0);
             const mainRef = useRef(null);
             const tableHeaderRef = useRef(null);
+            const vesselSpecsRef = useRef(vesselSpecs);
 
             const addApiLog = useCallback((level, message, extra = null) => {
                 const entry = {
@@ -766,6 +767,8 @@
                 e.target.value = '';
             };
 
+            useEffect(() => { vesselSpecsRef.current = vesselSpecs; }, [vesselSpecs]);
+
             const applyLiveData = useCallback((raw) => {
                 if (!raw) {
                     addApiLog("warn", "applyLiveData called with empty payload");
@@ -803,7 +806,7 @@
                         const newRoute = (match.Route || "").toString().trim();
                         // 엑셀 항로구분 우선, 없으면 API seawy_se_nm에서 판단 (현재 API엔 보조구분 없음 → 항상 일반)
                         const cdKey = (v.psnshp_cd || "").toUpperCase();
-                        const specs = vesselSpecs[cdKey] || {};
+                        const specs = vesselSpecsRef.current[cdKey] || {};
                         const excelRouteType = (specs.항로구분 || "").trim();
                         const newRouteType = excelRouteType === "보조" ? "보조" : "일반";
                         const newInspectionType = specs.검사종류 || v.inspectionType || '';
@@ -831,7 +834,7 @@
                     });
                     return changed ? next : prev;
                 });
-            }, [addApiLog, vesselSpecs]);
+            }, [addApiLog]);
 
             // vesselSpecs 변경 시 vessels에 검사/항로구분 즉시 반영
             useEffect(() => {
@@ -933,6 +936,7 @@
                     return () => clearInterval(timer);
                 }
 
+                const timer = setInterval(initialLoad, 60000);
                 const client = supabaseJs.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
                 const channel = client.channel('vessel-status-rt')
                     .on('postgres_changes',
@@ -955,7 +959,7 @@
                         else if (status === 'CHANNEL_ERROR') addApiLog("error", "Realtime 연결 오류", { source: "realtime" });
                     });
 
-                return () => { client.removeChannel(channel); };
+                return () => { clearInterval(timer); client.removeChannel(channel); };
             }, [SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_TABLE, applyLiveData, addApiLog]);
 
             // ── 항로 기반 표시 모드 ────────────────────────────────────────
