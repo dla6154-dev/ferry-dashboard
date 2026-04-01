@@ -902,9 +902,9 @@
                     const newRow = normalizeRow(row);
                     const lastSync = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace("T", " ");
                     setLastUpdate(lastSync);
-                    // liveData 병합 업데이트
+                    // liveData 병합 업데이트 (psnshp_cd + Route 복합키)
                     setLiveData(prev => {
-                        const idx = prev.findIndex(r => r.psnshp_cd === newRow.psnshp_cd);
+                        const idx = prev.findIndex(r => r.psnshp_cd === newRow.psnshp_cd && r.Route === newRow.Route);
                         if (idx >= 0) { const next = [...prev]; next[idx] = newRow; return next; }
                         return [...prev, newRow];
                     });
@@ -946,7 +946,7 @@
                     .on('postgres_changes',
                         { event: 'DELETE', schema: 'public', table: SUPABASE_TABLE },
                         ({ old: row }) => {
-                            setLiveData(prev => prev.filter(r => r.psnshp_cd !== row.psnshp_cd));
+                            setLiveData(prev => prev.filter(r => !(r.psnshp_cd === row.psnshp_cd && r.Route === row.Route)));
                             addApiLog("success", `Realtime DELETE: ${row.psnshp_cd}`, { source: "realtime" });
                         }
                     )
