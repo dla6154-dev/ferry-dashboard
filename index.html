@@ -367,6 +367,7 @@
             const [centerSaveStatus, setCenterSaveStatus] = useState('');
             const [centerEditing, setCenterEditing] = useState(false);
             const [centerEditName, setCenterEditName] = useState('');
+            const [centerEditingId, setCenterEditingId] = useState('');
             const [centerDropdownOpen, setCenterDropdownOpen] = useState(false);
             const [allCenters, setAllCenters] = useState([]);
             const [showCenterCreate, setShowCenterCreate] = useState(false);
@@ -671,19 +672,20 @@
             // ── 센터 이름 수정 ────────────────────────────────────────────
             const updateCenterInfo = async () => {
                 const name = centerEditName.trim();
+                const code = centerEditingId;
                 if (!name) { setCenterSaveStatus('❌ 센터 이름을 입력하세요'); setTimeout(() => setCenterSaveStatus(''), 3000); return; }
                 setCenterSaveStatus('수정 중...');
                 try {
-                    const res = await fetch(`${SUPABASE_URL}/rest/v1/centers?center_code=eq.${centerCode}`, {
+                    const res = await fetch(`${SUPABASE_URL}/rest/v1/centers?center_code=eq.${code}`, {
                         method: 'PATCH',
                         headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
                         body: JSON.stringify({ center_name: name, updated_at: new Date().toISOString() })
                     });
                     if (!res.ok) throw new Error(await res.text());
-                    localStorage.setItem('centerName', name);
-                    setCenterName(name); setCenterEditing(false);
+                    if (code === centerCode) { localStorage.setItem('centerName', name); setCenterName(name); }
+                    setCenterEditing(false); setCenterEditingId('');
                     await fetchAllCenters();
-                    setCenterSaveStatus(`✅ [${centerCode}] ${name} 수정 완료`);
+                    setCenterSaveStatus(`✅ [${code}] ${name} 수정 완료`);
                     setTimeout(() => setCenterSaveStatus(''), 3000);
                 } catch (err) {
                     setCenterSaveStatus('❌ 오류: ' + err.message);
@@ -1486,7 +1488,7 @@
                                     {/* 센터 코드 설정 */}
                                     <div>
                                         <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-                                            <Icon name="shield" size={13}/> 센터 코드
+                                            <Icon name="shield" size={13}/> 센터 선택
                                         </h4>
 
                                         {/* 현재 센터 드롭다운 */}
@@ -1544,17 +1546,15 @@
                                             </div>
                                         )}
 
-                                        {/* 하단 카드 3개: 불러오기 / 저장 / 수정 */}
+                                        {/* 하단 카드 3개: 생성 / 저장 / 수정 */}
                                         <div className="grid grid-cols-3 gap-2 mb-3">
-                                            {/* 불러오기 */}
+                                            {/* 생성 */}
                                             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                                                <p className="text-xs font-black text-slate-600 mb-2 flex items-center gap-1"><Icon name="download" size={11}/>불러오기</p>
-                                                <div className="flex flex-col gap-1">
-                                                    <input type="text" maxLength={4} placeholder="코드 4자리" value={centerCodeInput}
-                                                        onChange={e => setCenterCodeInput(e.target.value.replace(/\D/g,'').slice(0,4))}
-                                                        className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-black text-center outline-none focus:border-blue-400"/>
-                                                    <button onClick={loadCenterByCode} className="w-full py-1.5 bg-slate-600 hover:bg-slate-700 text-white rounded-lg text-xs font-bold transition-colors">불러오기</button>
-                                                </div>
+                                                <p className="text-xs font-black text-slate-600 mb-2 flex items-center gap-1"><Icon name="plus-circle" size={11}/>생성</p>
+                                                <button onClick={() => { setShowCenterCreate(p => !p); setCenterEditing(false); setCenterDropdownOpen(false); }}
+                                                    className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors">
+                                                    새 센터 만들기
+                                                </button>
                                             </div>
                                             {/* 저장 */}
                                             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
@@ -1566,22 +1566,46 @@
                                             {/* 수정 */}
                                             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
                                                 <p className="text-xs font-black text-slate-600 mb-2 flex items-center gap-1"><Icon name="edit-3" size={11}/>수정</p>
-                                                {!centerEditing ? (
-                                                    <button onClick={() => { setCenterEditName(centerName); setCenterEditing(true); }} disabled={!centerCode}
-                                                        className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white rounded-lg text-xs font-bold transition-colors">이름 수정</button>
-                                                ) : (
-                                                    <div className="flex flex-col gap-1">
-                                                        <input type="text" placeholder="새 센터 이름" value={centerEditName}
-                                                            onChange={e => setCenterEditName(e.target.value)}
-                                                            className="w-full px-2 py-1.5 border border-amber-300 rounded-lg text-xs outline-none focus:border-amber-500"/>
-                                                        <div className="flex gap-1">
-                                                            <button onClick={updateCenterInfo} className="flex-1 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-colors">저장</button>
-                                                            <button onClick={() => setCenterEditing(false)} className="flex-1 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-lg text-xs font-bold transition-colors">취소</button>
-                                                        </div>
-                                                    </div>
-                                                )}
+                                                <button onClick={() => { fetchAllCenters(); setCenterEditing(p => !p); setShowCenterCreate(false); setCenterDropdownOpen(false); setCenterEditingId(''); }}
+                                                    className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-colors">
+                                                    센터 수정
+                                                </button>
                                             </div>
                                         </div>
+
+                                        {/* 수정 모드: 등록된 센터 목록 + 연필 아이콘 */}
+                                        {centerEditing && (
+                                            <div className="mb-3 border border-amber-200 rounded-xl overflow-hidden">
+                                                <div className="px-3 py-2 bg-amber-50 border-b border-amber-200">
+                                                    <p className="text-xs font-black text-amber-700">등록된 센터 목록</p>
+                                                </div>
+                                                {allCenters.length === 0 && <div className="px-4 py-3 text-xs text-slate-400 text-center">등록된 센터가 없습니다</div>}
+                                                {allCenters.map(c => (
+                                                    <div key={c.center_code} className="border-b border-slate-100 last:border-0">
+                                                        {centerEditingId === c.center_code ? (
+                                                            <div className="flex items-center gap-2 px-3 py-2 bg-amber-50">
+                                                                <span className="text-xs font-black text-blue-700 shrink-0">[{c.center_code}]</span>
+                                                                <input type="text" value={centerEditName}
+                                                                    onChange={e => setCenterEditName(e.target.value)}
+                                                                    className="flex-1 px-2 py-1 border border-amber-300 rounded-lg text-xs outline-none focus:border-amber-500"/>
+                                                                <button onClick={updateCenterInfo} className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-colors">저장</button>
+                                                                <button onClick={() => setCenterEditingId('')} className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-lg text-xs font-bold transition-colors">취소</button>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50">
+                                                                <span className="text-xs font-black text-blue-700">[{c.center_code}]</span>
+                                                                <span className="text-xs text-slate-700 flex-1">{c.center_name}</span>
+                                                                {c.center_code === centerCode && <span className="text-xs text-blue-500 font-bold">현재</span>}
+                                                                <button onClick={() => { setCenterEditingId(c.center_code); setCenterEditName(c.center_name); }}
+                                                                    className="p-1 hover:bg-amber-100 text-amber-600 rounded-lg transition-colors">
+                                                                    <Icon name="pencil" size={12}/>
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
 
                                         {centerSaveStatus && (
                                             <div className={`px-3 py-2 rounded-lg text-xs font-bold ${centerSaveStatus.startsWith('❌') ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'}`}>
