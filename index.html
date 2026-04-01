@@ -1549,25 +1549,27 @@
                                         {/* 하단 카드 3개: 생성 / 저장 / 수정 */}
                                         <div className="grid grid-cols-3 gap-2 mb-3">
                                             {/* 생성 */}
-                                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-col">
                                                 <p className="text-xs font-black text-slate-600 mb-2 flex items-center gap-1"><Icon name="plus-circle" size={11}/>생성</p>
+                                                <p className="text-xs text-slate-400 mb-2">새 센터 코드를<br/>등록합니다</p>
                                                 <button onClick={() => { setShowCenterCreate(p => !p); setCenterEditing(false); setCenterDropdownOpen(false); }}
-                                                    className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors">
+                                                    className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors mt-auto">
                                                     새 센터 만들기
                                                 </button>
                                             </div>
                                             {/* 저장 */}
-                                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-col">
                                                 <p className="text-xs font-black text-slate-600 mb-2 flex items-center gap-1"><Icon name="save" size={11}/>저장</p>
                                                 <p className="text-xs text-slate-400 mb-2">현재 항로 설정을<br/>센터에 저장</p>
                                                 <button onClick={saveCurrentCenter} disabled={!centerCode}
-                                                    className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-lg text-xs font-bold transition-colors">저장</button>
+                                                    className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-lg text-xs font-bold transition-colors mt-auto">저장</button>
                                             </div>
                                             {/* 수정 */}
-                                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-col">
                                                 <p className="text-xs font-black text-slate-600 mb-2 flex items-center gap-1"><Icon name="edit-3" size={11}/>수정</p>
+                                                <p className="text-xs text-slate-400 mb-2">등록된 센터의<br/>이름을 변경</p>
                                                 <button onClick={() => { fetchAllCenters(); setCenterEditing(p => !p); setShowCenterCreate(false); setCenterDropdownOpen(false); setCenterEditingId(''); }}
-                                                    className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-colors">
+                                                    className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-colors mt-auto">
                                                     센터 수정
                                                 </button>
                                             </div>
