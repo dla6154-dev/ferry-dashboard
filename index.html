@@ -709,8 +709,10 @@
                                 비고: (row['비고'] || '').toString().trim(),
                             };
                         });
-                        localStorage.setItem('vesselSpecs', JSON.stringify(specs));
-                        setVesselSpecs(specs);
+                        const existingSpecs = JSON.parse(localStorage.getItem('vesselSpecs') || '{}');
+                        const mergedSpecs = { ...existingSpecs, ...specs };
+                        localStorage.setItem('vesselSpecs', JSON.stringify(mergedSpecs));
+                        setVesselSpecs(mergedSpecs);
                         const count = Object.keys(specs).length;
                         // 센터 코드 있으면 Supabase에도 업로드
                         if (centerCode) {
@@ -733,7 +735,18 @@
                                     body: JSON.stringify(rows)
                                 });
                                 if (!res.ok) throw new Error(await res.text());
-                                setExcelImportStatus(`✅ 완료: ${count}척 저장됨 (Supabase 동기화 완료)`);
+                                // Supabase에서 전체 병합 데이터 재로드
+                                const allRes = await fetch(`${SUPABASE_URL}/rest/v1/vessel_specs?center_code=eq.${centerCode}&select=*`, {
+                                    headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
+                                });
+                                if (allRes.ok) {
+                                    const allRows = await allRes.json();
+                                    const fullSpecs = {};
+                                    allRows.forEach(r => { fullSpecs[r.psnshp_cd] = { 선명: r.vessel_name, 선사: r.company, 항로구분: r.route_type, 톤수: r.tonnage, 정원: r.capacity, 진수일: r.launch_date, 속력: r.speed, 승무원: r.crew, 적재량: r.cargo, 차량수: r.cars, 검사종류: r.inspection_type, 검사만료: r.inspection_date, 비고: r.remarks }; });
+                                    localStorage.setItem('vesselSpecs', JSON.stringify(fullSpecs));
+                                    setVesselSpecs(fullSpecs);
+                                }
+                                setExcelImportStatus(`✅ 완료: ${count}척 추가/업데이트됨 (Supabase 동기화 완료)`);
                             } catch (err) {
                                 setExcelImportStatus(`⚠️ 로컬 저장 완료 (Supabase 업로드 실패: ${err.message})`);
                             }
