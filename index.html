@@ -91,17 +91,20 @@
 
         const calculateAge = (launchDateStr) => {
             if (!launchDateStr) return { years: 0, days: 0 };
-            const launchDate = new Date(launchDateStr);
-            const today = new Date();
+            const parts = launchDateStr.split('-');
+            if (parts.length !== 3) return { years: 0, days: 0 };
+            // 로컬 자정 기준으로 생성 (UTC 기준 new Date('YYYY-MM-DD')의 1일 오차 방지)
+            const launchDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
             if (isNaN(launchDate.getTime())) return { years: 0, days: 0 };
+            const today = new Date();
+            today.setHours(0, 0, 0, 0); // 오늘도 로컬 자정 기준
 
             let years = today.getFullYear() - launchDate.getFullYear();
-            let lastAnniversary = new Date(launchDate);
-            lastAnniversary.setFullYear(launchDate.getFullYear() + years);
+            // 윤달(2/29) 포함 정확한 기념일 계산
+            let lastAnniversary = new Date(launchDate.getFullYear() + years, launchDate.getMonth(), launchDate.getDate());
             if (today < lastAnniversary) {
                 years--;
-                lastAnniversary = new Date(launchDate);
-                lastAnniversary.setFullYear(launchDate.getFullYear() + years);
+                lastAnniversary = new Date(launchDate.getFullYear() + years, launchDate.getMonth(), launchDate.getDate());
             }
             const diffTime = today.getTime() - lastAnniversary.getTime();
             const days = Math.floor(diffTime / (1000 * 60 * 60 * 24));
