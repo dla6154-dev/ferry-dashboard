@@ -488,8 +488,9 @@
 
                 const headers = ["선박코드","선명","선사명","항로구분","톤수(GT)","정원","진수일","속력(노트)","승무원","적재량(톤)","차량수","검사종류","검사만료","비고"];
                 let rows = [];
+                const existingCodes = new Set();
 
-                // 센터 코드가 있으면 Supabase에서 기존 데이터 불러오기
+                // 1. Supabase에서 기존 등록 제원 불러오기 (삭제 없이 유지)
                 if (centerCode) {
                     try {
                         const res = await fetch(
@@ -498,32 +499,42 @@
                         );
                         if (res.ok) {
                             const existing = await res.json();
-                            rows = existing.map(r => [
-                                r.psnshp_cd || '', r.vessel_name || '', r.company || '',
-                                r.route_type || '', r.tonnage || '', r.capacity || '',
-                                r.launch_date || '', r.speed || '', r.crew || '',
-                                r.cargo || '', r.cars || '', r.inspection_type || '', r.inspection_date || '', r.remarks || ''
-                            ]);
+                            existing.forEach(r => {
+                                const cd = (r.psnshp_cd || '').trim();
+                                if (cd) existingCodes.add(cd);
+                                rows.push([
+                                    cd, r.vessel_name || '', r.company || '',
+                                    r.route_type || '', r.tonnage || '', r.capacity || '',
+                                    r.launch_date || '', r.speed || '', r.crew || '',
+                                    r.cargo || '', r.cars || '', r.inspection_type || '', r.inspection_date || '', r.remarks || ''
+                                ]);
+                            });
                         }
                     } catch(e) { console.warn('Supabase 조회 실패:', e); }
                 }
 
-                // Supabase 데이터 없으면 localStorage vesselSpecs 사용
+                // Supabase 없으면 localStorage vesselSpecs 사용
                 if (rows.length === 0 && Object.keys(vesselSpecs).length > 0) {
-                    rows = Object.entries(vesselSpecs).map(([cd, s]) => [
-                        cd, s.선명||'', s.선사||'', s.항로구분||'', s.톤수||'', s.정원||'',
-                        s.진수일||'', s.속력||'', s.승무원||'', s.적재량||'', s.차량수||'', s.검사종류||'', s.검사만료||'', s.비고||''
-                    ]);
+                    Object.entries(vesselSpecs).forEach(([cd, s]) => {
+                        existingCodes.add(cd.trim());
+                        rows.push([cd, s.선명||'', s.선사||'', s.항로구분||'', s.톤수||'', s.정원||'',
+                            s.진수일||'', s.속력||'', s.승무원||'', s.적재량||'', s.차량수||'', s.검사종류||'', s.검사만료||'', s.비고||'']);
+                    });
                 }
 
-                // 데이터 없으면 빈 샘플 행 3개
-                if (rows.length === 0) {
-                    rows = [
-                        ["F122","가사페리호","","일반","","","2018-01-01",10.0,3,20,8,"정기검사","2026-06-30",""],
-                        ["F67","섬사랑12호","","보조","","","2001-01-22",10.0,3,0,0,"중간검사","2025-12-31",""],
-                        ["F125","뉴돌핀호","","일반","","","2003-01-01",34.0,6,0,0,"정기검사","2026-03-15",""],
-                    ];
-                }
+                // 2. 현재 선택 항로의 API 선박 중 기존 미등록 선박만 추가
+                const newVessels = liveData.filter(v => {
+                    const cd = (v.psnshp_cd || '').toString().trim();
+                    return selectedRoutes.includes(v.Route) && cd && !existingCodes.has(cd);
+                });
+                // 중복 제거 (같은 코드 여러 번 나오는 경우 대비)
+                const seenNew = new Set();
+                newVessels.forEach(v => {
+                    const cd = (v.psnshp_cd || '').toString().trim();
+                    if (seenNew.has(cd)) return;
+                    seenNew.add(cd);
+                    rows.push([cd, v.psnshp_nm || '', '', '', '', '', '', '', '', '', '', '', '', '']);
+                });
 
                 const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
                 ws['!cols'] = [12,16,16,12,10,8,14,12,10,12,10,14,14,20].map(w => ({ wch: w }));
