@@ -1041,6 +1041,28 @@
                 return () => { clearInterval(timer); client.removeChannel(channel); };
             }, [SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_TABLE, applyLiveData, addApiLog]);
 
+            // ── centers 테이블 Realtime 구독 (항로 설정 실시간 동기화) ──────
+            useEffect(() => {
+                if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !centerCode) return;
+                const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                const channel = client.channel('centers-rt')
+                    .on('postgres_changes', {
+                        event: 'UPDATE', schema: 'public', table: 'centers',
+                        filter: `center_code=eq.${centerCode}`
+                    }, ({ new: row }) => {
+                        if (Array.isArray(row.selected_routes)) {
+                            localStorage.setItem('selectedRoutes', JSON.stringify(row.selected_routes));
+                            setSelectedRoutes(row.selected_routes);
+                        }
+                        if (row.center_name) {
+                            localStorage.setItem('centerName', row.center_name);
+                            setCenterName(row.center_name);
+                        }
+                    })
+                    .subscribe();
+                return () => { client.removeChannel(channel); };
+            }, [SUPABASE_URL, SUPABASE_ANON_KEY, centerCode]);
+
             // ── 항로 기반 표시 모드 ────────────────────────────────────────
             const uniqueApiRoutes = useMemo(() => {
                 const routes = liveData.map(v => v.Route).filter(Boolean);
