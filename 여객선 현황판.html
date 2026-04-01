@@ -365,6 +365,9 @@
             const [centerCodeInput, setCenterCodeInput] = useState('');
             const [centerNameInput, setCenterNameInput] = useState('');
             const [centerSaveStatus, setCenterSaveStatus] = useState('');
+            const [centerEditing, setCenterEditing] = useState(false);
+            const [centerEditCode, setCenterEditCode] = useState('');
+            const [centerEditName, setCenterEditName] = useState('');
             
             const [lastUpdate, setLastUpdate] = useState("연동 대기 중...");
             const [editingVessel, setEditingVessel] = useState(null);
@@ -573,8 +576,19 @@
                 const name = centerNameInput.trim();
                 if (!/^\d{4}$/.test(code)) { setCenterSaveStatus('❌ 코드는 숫자 4자리여야 합니다'); setTimeout(() => setCenterSaveStatus(''), 3000); return; }
                 if (!name) { setCenterSaveStatus('❌ 센터 이름을 입력하세요'); setTimeout(() => setCenterSaveStatus(''), 3000); return; }
-                setCenterSaveStatus('저장 중...');
+                setCenterSaveStatus('확인 중...');
                 try {
+                    // 코드 존재 여부 먼저 확인
+                    const chk = await fetch(`${SUPABASE_URL}/rest/v1/centers?center_code=eq.${code}&select=center_code,center_name`, {
+                        headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
+                    });
+                    const existing = await chk.json();
+                    if (existing.length > 0) {
+                        setCenterSaveStatus(`❌ [${code}]에 저장된 센터가 존재합니다 (${existing[0].center_name})`);
+                        setTimeout(() => setCenterSaveStatus(''), 4000);
+                        return;
+                    }
+                    setCenterSaveStatus('저장 중...');
                     const res = await fetch(`${SUPABASE_URL}/rest/v1/centers`, {
                         method: 'POST',
                         headers: {
@@ -590,11 +604,39 @@
                     localStorage.setItem('centerName', name);
                     setCenterCode(code);
                     setCenterName(name);
-                    setCenterSaveStatus(`✅ 저장됨 [${code}] ${name}`);
+                    setCenterSaveStatus(`✅ [${code}] ${name} 등록 완료`);
                     setTimeout(() => setCenterSaveStatus(''), 4000);
                 } catch (err) {
                     setCenterSaveStatus('❌ 오류: ' + err.message);
                     setTimeout(() => setCenterSaveStatus(''), 4000);
+                }
+            };
+
+            // ── 현재 센터 정보 수정 저장 ──────────────────────────────────
+            const updateCenterInfo = async () => {
+                const code = centerEditCode.trim();
+                const name = centerEditName.trim();
+                if (!name) { setCenterSaveStatus('❌ 센터 이름을 입력하세요'); setTimeout(() => setCenterSaveStatus(''), 3000); return; }
+                setCenterSaveStatus('수정 중...');
+                try {
+                    const res = await fetch(`${SUPABASE_URL}/rest/v1/centers?center_code=eq.${code}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'apikey': SUPABASE_ANON_KEY,
+                            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ center_name: name, updated_at: new Date().toISOString() })
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    localStorage.setItem('centerName', name);
+                    setCenterName(name);
+                    setCenterEditing(false);
+                    setCenterSaveStatus(`✅ [${code}] ${name} 수정 완료`);
+                    setTimeout(() => setCenterSaveStatus(''), 3000);
+                } catch (err) {
+                    setCenterSaveStatus('❌ 오류: ' + err.message);
+                    setTimeout(() => setCenterSaveStatus(''), 3000);
                 }
             };
 
@@ -1416,13 +1458,34 @@
                                         <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
                                             <Icon name="shield" size={13}/> 센터 코드
                                         </h4>
-                                        {centerCode && (
+                                        {/* 현재 센터 표시 + 수정 */}
+                                        {centerCode && !centerEditing && (
                                             <div className="mb-3 px-4 py-2 bg-blue-50 border border-blue-200 rounded-xl flex items-center gap-2">
                                                 <Icon name="check-circle" size={14} className="text-blue-500"/>
                                                 <span className="text-sm font-black text-blue-700">[{centerCode}]</span>
-                                                <span className="text-sm text-blue-600">{centerName}</span>
+                                                <span className="text-sm text-blue-600 flex-1">{centerName}</span>
+                                                <button onClick={() => { setCenterEditCode(centerCode); setCenterEditName(centerName); setCenterEditing(true); }}
+                                                    className="px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-xs font-bold transition-colors">
+                                                    수정
+                                                </button>
                                             </div>
                                         )}
+                                        {/* 수정 폼 */}
+                                        {centerEditing && (
+                                            <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                                                <p className="text-xs font-bold text-amber-600 mb-2">센터 정보 수정</p>
+                                                <div className="flex gap-2">
+                                                    <div className="w-28 px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-black text-center text-slate-400">{centerEditCode}</div>
+                                                    <input type="text" placeholder="센터 이름"
+                                                        value={centerEditName}
+                                                        onChange={e => setCenterEditName(e.target.value)}
+                                                        className="flex-1 px-3 py-2 border border-amber-300 rounded-xl text-sm outline-none focus:border-amber-500"/>
+                                                    <button onClick={updateCenterInfo} className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-bold transition-colors">저장</button>
+                                                    <button onClick={() => setCenterEditing(false)} className="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-xl text-sm font-bold transition-colors">취소</button>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {/* 새 센터 등록 / 불러오기 */}
                                         <div className="flex gap-2 mb-2">
                                             <input
                                                 type="text" maxLength={4} placeholder="코드 4자리"
@@ -1437,9 +1500,9 @@
                                                 className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm outline-none focus:border-blue-400"
                                             />
                                             <button onClick={saveCenterInfo} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-colors">
-                                                저장
+                                                신규
                                             </button>
-                                            <button onClick={loadCenterByCode} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition-colors" title="코드만으로 기존 설정 불러오기">
+                                            <button onClick={loadCenterByCode} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition-colors">
                                                 불러오기
                                             </button>
                                         </div>
@@ -1448,7 +1511,7 @@
                                                 {centerSaveStatus}
                                             </div>
                                         )}
-                                        <p className="mt-2 text-xs text-slate-400">저장: 새 코드 등록 | 불러오기: 기존 코드로 항로·제원 가져오기</p>
+                                        <p className="mt-2 text-xs text-slate-400">신규: 새 센터 등록 | 불러오기: 기존 코드로 항로·제원 가져오기</p>
                                     </div>
                                     {/* 모니터 & 편집모드 */}
                                     <div>
