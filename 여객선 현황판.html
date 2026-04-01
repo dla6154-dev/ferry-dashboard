@@ -1582,7 +1582,7 @@
                                             {/* 저장 */}
                                             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-col">
                                                 <p className="text-xs font-black text-slate-600 mb-2 flex items-center gap-1"><Icon name="save" size={11}/>저장</p>
-                                                <p className="text-xs text-slate-400 mb-2">현재 항로 설정을<br/>센터에 저장</p>
+                                                <p className="text-xs text-slate-400 mb-2">현재 데이터를<br/>서버에 저장</p>
                                                 <button onClick={saveCurrentCenter} disabled={!centerCode}
                                                     className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-lg text-xs font-bold transition-colors mt-auto">저장</button>
                                             </div>
@@ -1643,24 +1643,30 @@
                                             <Icon name="monitor" size={13}/> 모니터 / 편집 모드
                                         </h4>
                                         <div className="grid grid-cols-2 gap-3">
-                                            <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 gap-3">
-                                                <Icon name="monitor" size={15} className="text-slate-500 shrink-0"/>
-                                                <span className="text-sm font-bold text-slate-700">모니터</span>
-                                                <select value={monitorId} onChange={(e) => setMonitorId(Number(e.target.value))} className="ml-auto bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm font-black outline-none">
-                                                    {[1, 2, 3].map(n => <option key={n} value={n}>{n}번</option>)}
-                                                </select>
+                                            <div className="flex flex-col bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 gap-1">
+                                                <div className="flex items-center gap-2">
+                                                    <Icon name="monitor" size={15} className="text-slate-500 shrink-0"/>
+                                                    <span className="text-sm font-bold text-slate-700">모니터</span>
+                                                    <select value={monitorId} onChange={(e) => setMonitorId(Number(e.target.value))} className="ml-auto bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm font-black outline-none">
+                                                        {[1, 2, 3].map(n => <option key={n} value={n}>{n}번</option>)}
+                                                    </select>
+                                                </div>
+                                                <span className="text-xs text-slate-400">다중모니터 사용 시</span>
                                             </div>
                                             <button
                                                 onClick={() => setIsEditMode(prev => !prev)}
-                                                className={`flex items-center justify-between px-4 py-3 rounded-xl border-2 font-bold text-sm transition-all ${isEditMode ? 'bg-amber-50 border-amber-400 text-amber-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
+                                                className={`flex flex-col px-4 py-3 rounded-xl border-2 font-bold text-sm transition-all text-left ${isEditMode ? 'bg-amber-50 border-amber-400 text-amber-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}
                                             >
-                                                <div className="flex items-center gap-2">
-                                                    <Icon name="edit-3" size={15}/>
-                                                    {isEditMode ? '편집 중' : '편집 모드'}
+                                                <div className="flex items-center justify-between w-full">
+                                                    <div className="flex items-center gap-2">
+                                                        <Icon name="edit-3" size={15}/>
+                                                        {isEditMode ? '편집 중' : '편집 모드'}
+                                                    </div>
+                                                    <div className={`w-10 h-5 rounded-full transition-all ${isEditMode ? 'bg-amber-400' : 'bg-slate-300'} relative`}>
+                                                        <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${isEditMode ? 'left-5' : 'left-0.5'}`}></div>
+                                                    </div>
                                                 </div>
-                                                <div className={`w-10 h-5 rounded-full transition-all ${isEditMode ? 'bg-amber-400' : 'bg-slate-300'} relative`}>
-                                                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${isEditMode ? 'left-5' : 'left-0.5'}`}></div>
-                                                </div>
+                                                <span className="text-xs font-normal text-slate-400 mt-1">소규모의 수정이 필요한 경우</span>
                                             </button>
                                         </div>
                                     </div>
@@ -1672,9 +1678,6 @@
                                         <div className="grid grid-cols-2 gap-2">
                                             <button onClick={() => window.open(window.location.href, '_blank')} className="flex items-center gap-2 px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 transition-colors">
                                                 <Icon name="external-link" size={15} className="text-slate-500"/> 새 창 열기
-                                            </button>
-                                            <button onClick={() => { setShowSettings(false); setIsBulkModalOpen(true); }} className="flex items-center gap-2 px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 transition-colors">
-                                                <Icon name="list-plus" size={15} className="text-slate-500"/> 일괄 등록
                                             </button>
                                             <button onClick={() => { setShowSettings(false); setEditingVessel(null); setIsModalOpen(true); }} className="flex items-center gap-2 px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 transition-colors">
                                                 <Icon name="plus" size={15} className="text-sky-500"/> 선박 추가
