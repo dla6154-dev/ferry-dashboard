@@ -689,7 +689,12 @@
                             if (!cd) return;
                             const parseDate = (v) => {
                                 if (!v) return '';
-                                if (v instanceof Date) return v.toISOString().slice(0, 10);
+                                if (v instanceof Date) {
+                                    const y = v.getFullYear();
+                                    const m = String(v.getMonth() + 1).padStart(2, '0');
+                                    const d = String(v.getDate()).padStart(2, '0');
+                                    return `${y}-${m}-${d}`;
+                                }
                                 const s = v.toString().trim();
                                 if (/^\d{5}$/.test(s)) {
                                     const d = XLSX.SSF.parse_date_code(Number(s));
