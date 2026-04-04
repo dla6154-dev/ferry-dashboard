@@ -973,7 +973,11 @@
                 });
 
                 // 초기 전체 로드
-                const initialLoad = async () => {
+                // 마지막 전체 조회 시각 및 증분 기준 시각
+                let lastFullLoadTime = 0;
+                let lastIncrementalTime = null; // ISO string
+
+                const fullLoad = async () => {
                     const startedAt = Date.now();
                     try {
                         const res = await fetch(
@@ -985,11 +989,39 @@
                         const data = rows.map(normalizeRow);
                         const lastSync = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace("T", " ");
                         applyLiveData({ data, lastSync });
-                        addApiLog("success", `초기 로드 완료 (${data.length}척)`, { source: "supabase", elapsedMs: Date.now() - startedAt });
+                        lastFullLoadTime = Date.now();
+                        lastIncrementalTime = new Date().toISOString();
+                        addApiLog("success", `전체 로드 완료 (${data.length}척)`, { source: "supabase", elapsedMs: Date.now() - startedAt });
                     } catch (err) {
-                        addApiLog("error", `초기 로드 실패: ${err.message}`);
+                        addApiLog("error", `전체 로드 실패: ${err.message}`);
                     }
                 };
+
+                const incrementalLoad = async () => {
+                    // 10분마다 전체 조회 (삭제된 선박 감지)
+                    if (!lastIncrementalTime || Date.now() - lastFullLoadTime >= 600000) {
+                        await fullLoad();
+                        return;
+                    }
+                    const startedAt = Date.now();
+                    try {
+                        const since = encodeURIComponent(lastIncrementalTime);
+                        const res = await fetch(
+                            `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?select=*&updated_at=gt.${since}`,
+                            { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Accept": "application/json" } }
+                        );
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        const rows = await res.json();
+                        lastIncrementalTime = new Date().toISOString();
+                        if (rows.length === 0) return; // 변경 없음 — 아무것도 안함
+                        rows.forEach(row => applyRowUpdate(row));
+                        addApiLog("success", `증분 로드 완료 (${rows.length}척 변경)`, { source: "supabase", elapsedMs: Date.now() - startedAt });
+                    } catch (err) {
+                        addApiLog("error", `증분 로드 실패: ${err.message}`);
+                    }
+                };
+
+                const initialLoad = fullLoad;
 
                 // 단일 행 업데이트 (Realtime용 - liveData 병합, vessels 개별 갱신)
                 const applyRowUpdate = (row) => {
@@ -1022,14 +1054,14 @@
                 // Realtime 구독
                 const supabaseJs = window.supabase;
                 if (!supabaseJs) {
-                    addApiLog("warn", "Supabase JS 미로드 — 60초 폴링으로 대체");
-                    const timer = setInterval(initialLoad, 60000);
+                    addApiLog("warn", "Supabase JS 미로드 — 60초 증분 폴링으로 대체");
+                    const timer = setInterval(incrementalLoad, 60000);
                     return () => clearInterval(timer);
                 }
 
                 // vessel_status Realtime 구독 해제 (Free 플랜 메시지 한도 절약)
-                // 60초 polling으로만 데이터 갱신
-                const timer = setInterval(initialLoad, 60000);
+                // 60초 증분 조회 + 10분마다 전체 조회
+                const timer = setInterval(incrementalLoad, 60000);
                 return () => { clearInterval(timer); };
             }, [SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_TABLE, applyLiveData, addApiLog]);
 
