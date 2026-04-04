@@ -420,7 +420,7 @@
                 try {
                     const routeFilter = selectedRoutes.map(r => `"${r}"`).join(',');
                     const res = await fetch(
-                        `${SUPABASE_URL}/rest/v1/vessel_change_log?route=in.(${encodeURIComponent(routeFilter)})&order=changed_at.desc&limit=200`,
+                        `${SUPABASE_URL}/rest/v1/vessel_change_log?source_type=eq.daily_snapshot&route=in.(${encodeURIComponent(routeFilter)})&order=changed_at.desc&limit=200`,
                         { headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } }
                     );
                     if (res.ok) {
@@ -702,19 +702,22 @@
 
 
             // ── 센터 코드로 제원 + 항로 불러오기 ──────────────────────────
-            const fetchSpecsByCenter = React.useCallback(async (code) => {
+            const fetchSpecsByCenter = React.useCallback(async (code, options = {}) => {
+                const { includeRoutes = true } = options;
                 if (!code) return;
                 try {
-                    // 센터 정보(항로 포함) 먼저 불러오기
-                    const centerRes = await fetch(`${SUPABASE_URL}/rest/v1/centers?center_code=eq.${code}&select=selected_routes`, {
-                        headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
-                    });
-                    if (centerRes.ok) {
-                        const centerRows = await centerRes.json();
-                        if (centerRows.length > 0 && Array.isArray(centerRows[0].selected_routes)) {
-                            const routes = centerRows[0].selected_routes;
-                            localStorage.setItem('selectedRoutes', JSON.stringify(routes));
-                            setSelectedRoutes(routes);
+                    if (includeRoutes) {
+                        // 센터 정보(항로 포함) 먼저 불러오기
+                        const centerRes = await fetch(`${SUPABASE_URL}/rest/v1/centers?center_code=eq.${code}&select=selected_routes`, {
+                            headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
+                        });
+                        if (centerRes.ok) {
+                            const centerRows = await centerRes.json();
+                            if (centerRows.length > 0 && Array.isArray(centerRows[0].selected_routes)) {
+                                const routes = centerRows[0].selected_routes;
+                                localStorage.setItem('selectedRoutes', JSON.stringify(routes));
+                                setSelectedRoutes(routes);
+                            }
                         }
                     }
                     const res = await fetch(`${SUPABASE_URL}/rest/v1/vessel_specs?center_code=eq.${code}&select=*`, {
@@ -742,6 +745,15 @@
             // 센터 코드 있으면 시작 시 자동 로드
             React.useEffect(() => {
                 if (centerCode) fetchSpecsByCenter(centerCode);
+            }, [centerCode, fetchSpecsByCenter]);
+
+            // 열려 있는 동안 센터 제원도 1분마다 재조회해서 서버 직접 수정분을 반영
+            React.useEffect(() => {
+                if (!centerCode) return;
+                const timer = setInterval(() => {
+                    fetchSpecsByCenter(centerCode, { includeRoutes: false });
+                }, 60000);
+                return () => clearInterval(timer);
             }, [centerCode, fetchSpecsByCenter]);
 
             // ── Excel 가져오기 ─────────────────────────────────────────────
@@ -1044,7 +1056,12 @@
             // ── centers 테이블 Realtime 구독 (항로 설정 실시간 동기화) ──────
             useEffect(() => {
                 if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !centerCode) return;
-                const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                const supabaseJs = window.supabase;
+                if (!supabaseJs) {
+                    addApiLog("warn", "Supabase JS missing; center realtime sync disabled");
+                    return;
+                }
+                const client = supabaseJs.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
                 const channel = client.channel('centers-rt')
                     .on('postgres_changes', {
                         event: 'UPDATE', schema: 'public', table: 'centers',
@@ -1058,10 +1075,22 @@
                             localStorage.setItem('centerName', row.center_name);
                             setCenterName(row.center_name);
                         }
+                        fetchSpecsByCenter(centerCode);
+                        addApiLog("success", `center refresh signal received: ${centerCode}`, { source: "realtime" });
                     })
                     .subscribe();
-                return () => { client.removeChannel(channel); };
-            }, [SUPABASE_URL, SUPABASE_ANON_KEY, centerCode]);
+                // vessel_specs Realtime — 엑셀 가져오기 시 다른 PC 자동 반영
+                const specsChannel = client.channel('vessel-specs-rt')
+                    .on('postgres_changes', {
+                        event: '*', schema: 'public', table: 'vessel_specs',
+                        filter: `center_code=eq.${centerCode}`
+                    }, () => {
+                        fetchSpecsByCenter(centerCode);
+                        addApiLog("success", `vessel_specs 변경 감지 → 자동 갱신`, { source: "realtime" });
+                    })
+                    .subscribe();
+                return () => { client.removeChannel(channel); client.removeChannel(specsChannel); };
+            }, [SUPABASE_URL, SUPABASE_ANON_KEY, centerCode, fetchSpecsByCenter, addApiLog]);
 
             // ── 항로 기반 표시 모드 ────────────────────────────────────────
             const uniqueApiRoutes = useMemo(() => {
@@ -1853,7 +1882,7 @@
                                             <Icon name="inbox" size={28} className="opacity-40"/>
                                             <div className="text-center">
                                                 <p className="font-bold text-slate-500">변동 이력이 없습니다</p>
-                                                <p className="text-xs mt-1">트리거 등록 이후 변동 발생 시 기록됩니다</p>
+                                                <p className="text-xs mt-1">매일 01시 기준 스냅샷 비교 결과만 기록됩니다</p>
                                             </div>
                                         </div>
                                     ) : (
