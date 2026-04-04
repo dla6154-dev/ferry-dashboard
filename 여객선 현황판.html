@@ -1027,30 +1027,10 @@
                     return () => clearInterval(timer);
                 }
 
+                // vessel_status Realtime 구독 해제 (Free 플랜 메시지 한도 절약)
+                // 60초 polling으로만 데이터 갱신
                 const timer = setInterval(initialLoad, 60000);
-                const client = supabaseJs.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-                const channel = client.channel('vessel-status-rt')
-                    .on('postgres_changes',
-                        { event: 'INSERT', schema: 'public', table: SUPABASE_TABLE },
-                        ({ new: row }) => { applyRowUpdate(row); addApiLog("success", `Realtime INSERT: ${row.psnshp_nm}`, { source: "realtime" }); }
-                    )
-                    .on('postgres_changes',
-                        { event: 'UPDATE', schema: 'public', table: SUPABASE_TABLE },
-                        ({ new: row }) => { applyRowUpdate(row); addApiLog("success", `Realtime UPDATE: ${row.psnshp_nm}`, { source: "realtime" }); }
-                    )
-                    .on('postgres_changes',
-                        { event: 'DELETE', schema: 'public', table: SUPABASE_TABLE },
-                        ({ old: row }) => {
-                            setLiveData(prev => prev.filter(r => !(r.psnshp_cd === row.psnshp_cd && r.Route === row.Route)));
-                            addApiLog("success", `Realtime DELETE: ${row.psnshp_cd}`, { source: "realtime" });
-                        }
-                    )
-                    .subscribe((status) => {
-                        if (status === 'SUBSCRIBED') addApiLog("success", "✅ Realtime 연결됨 — 변경 시에만 수신", { source: "realtime" });
-                        else if (status === 'CHANNEL_ERROR') addApiLog("error", "Realtime 연결 오류", { source: "realtime" });
-                    });
-
-                return () => { clearInterval(timer); client.removeChannel(channel); };
+                return () => { clearInterval(timer); };
             }, [SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_TABLE, applyLiveData, addApiLog]);
 
             // ── centers 테이블 Realtime 구독 (항로 설정 실시간 동기화) ──────
