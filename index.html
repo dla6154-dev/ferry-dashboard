@@ -339,6 +339,7 @@
             // ─────────────────────────────────────────────────────────────
 
             const LOCAL_DATA_JS_PATH = "vessel_data.js";
+            const SPECS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
             const [vessels, setVessels] = useState([]);
             const [liveData, setLiveData] = useState([]);
@@ -358,6 +359,9 @@
             });
             const [showRouteSelector, setShowRouteSelector] = useState(false);
             const [excelImportStatus, setExcelImportStatus] = useState('');
+            const [specRefreshStatus, setSpecRefreshStatus] = useState('');
+            const [lastSpecsRefresh, setLastSpecsRefresh] = useState('');
+            const [isSpecsRefreshing, setIsSpecsRefreshing] = useState(false);
 
             // ── 센터 코드 ─────────────────────────────────────────────────────
             const [centerCode, setCenterCode] = useState(() => localStorage.getItem('centerCode') || '');
@@ -410,26 +414,6 @@
             const [showSaveMsg, setShowSaveMsg] = useState(false);
             const [apiLogs, setApiLogs] = useState([]);
             const [showApiLogPanel, setShowApiLogPanel] = useState(false);
-            const [showChangeLog, setShowChangeLog] = useState(false);
-            const [changeLogs, setChangeLogs] = useState([]);
-            const [changeLogLoading, setChangeLogLoading] = useState(false);
-
-            const fetchChangeLogs = useCallback(async () => {
-                if (!SUPABASE_URL || !SUPABASE_ANON_KEY || selectedRoutes.length === 0) return;
-                setChangeLogLoading(true);
-                try {
-                    const routeFilter = selectedRoutes.map(r => `"${r}"`).join(',');
-                    const res = await fetch(
-                        `${SUPABASE_URL}/rest/v1/vessel_change_log?source_type=eq.daily_snapshot&route=in.(${encodeURIComponent(routeFilter)})&order=changed_at.desc&limit=200`,
-                        { headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } }
-                    );
-                    if (res.ok) {
-                        const data = await res.json();
-                        setChangeLogs(data);
-                    }
-                } catch (e) { /* ignore */ }
-                setChangeLogLoading(false);
-            }, [SUPABASE_URL, SUPABASE_ANON_KEY, selectedRoutes]);
             
             const lastMoveTimeRef = useRef(0);
             const mainRef = useRef(null);
@@ -704,7 +688,7 @@
             // ── 센터 코드로 제원 + 항로 불러오기 ──────────────────────────
             const fetchSpecsByCenter = React.useCallback(async (code, options = {}) => {
                 const { includeRoutes = true } = options;
-                if (!code) return;
+                if (!code) return false;
                 try {
                     if (includeRoutes) {
                         // 센터 정보(항로 포함) 먼저 불러오기
@@ -723,7 +707,7 @@
                     const res = await fetch(`${SUPABASE_URL}/rest/v1/vessel_specs?center_code=eq.${code}&select=*`, {
                         headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` }
                     });
-                    if (!res.ok) return;
+                    if (!res.ok) return false;
                     const rows = await res.json();
                     const specs = {};
                     rows.forEach(r => {
@@ -739,7 +723,10 @@
                     });
                     localStorage.setItem('vesselSpecs', JSON.stringify(specs));
                     setVesselSpecs(specs);
+                    setLastSpecsRefresh(new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace("T", " "));
+                    return true;
                 } catch (err) { console.warn('제원 로드 실패:', err); }
+                return false;
             }, [SUPABASE_URL, SUPABASE_ANON_KEY]);
 
             // 센터 코드 있으면 시작 시 자동 로드
@@ -747,12 +734,26 @@
                 if (centerCode) fetchSpecsByCenter(centerCode);
             }, [centerCode, fetchSpecsByCenter]);
 
+            const refreshSpecs = useCallback(async () => {
+                if (!centerCode || isSpecsRefreshing) return;
+                setIsSpecsRefreshing(true);
+                setSpecRefreshStatus('제원 새로고침 중...');
+                const ok = await fetchSpecsByCenter(centerCode, { includeRoutes: false });
+                if (ok) {
+                    setSpecRefreshStatus('제원 새로고침 완료');
+                } else {
+                    setSpecRefreshStatus('오류: 제원 새로고침 실패');
+                }
+                setIsSpecsRefreshing(false);
+                setTimeout(() => setSpecRefreshStatus(''), 3000);
+            }, [centerCode, fetchSpecsByCenter, isSpecsRefreshing]);
+
             // 열려 있는 동안 센터 제원도 1분마다 재조회해서 서버 직접 수정분을 반영
             React.useEffect(() => {
                 if (!centerCode) return;
                 const timer = setInterval(() => {
                     fetchSpecsByCenter(centerCode, { includeRoutes: false });
-                }, 60000);
+                }, SPECS_REFRESH_INTERVAL_MS);
                 return () => clearInterval(timer);
             }, [centerCode, fetchSpecsByCenter]);
 
@@ -1087,12 +1088,11 @@
                             localStorage.setItem('centerName', row.center_name);
                             setCenterName(row.center_name);
                         }
-                        fetchSpecsByCenter(centerCode);
                         addApiLog("success", `center refresh signal received: ${centerCode}`, { source: "realtime" });
                     })
                     .subscribe();
                 // vessel_specs Realtime — 엑셀 가져오기 시 다른 PC 자동 반영
-                const specsChannel = client.channel('vessel-specs-rt')
+                /* const specsChannel = client.channel('vessel-specs-rt')
                     .on('postgres_changes', {
                         event: '*', schema: 'public', table: 'vessel_specs',
                         filter: `center_code=eq.${centerCode}`
@@ -1101,7 +1101,8 @@
                         addApiLog("success", `vessel_specs 변경 감지 → 자동 갱신`, { source: "realtime" });
                     })
                     .subscribe();
-                return () => { client.removeChannel(channel); client.removeChannel(specsChannel); };
+                */
+                return () => { client.removeChannel(channel); };
             }, [SUPABASE_URL, SUPABASE_ANON_KEY, centerCode, fetchSpecsByCenter, addApiLog]);
 
             // ── 항로 기반 표시 모드 ────────────────────────────────────────
@@ -1464,9 +1465,18 @@
                                 <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
                                 갱신: <span className="text-emerald-300">{lastUpdate}</span>
                             </div>
-                            <button onClick={() => { setShowChangeLog(true); fetchChangeLogs(); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-white/10 transition-colors text-xs font-bold text-white/80 border border-white/20" title="관리선박변동">
-                                <Icon name="git-branch" size={14}/>
-                                관리선박변동
+                            <button
+                                onClick={refreshSpecs}
+                                disabled={!centerCode || isSpecsRefreshing}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors text-xs font-bold border ${
+                                    !centerCode || isSpecsRefreshing
+                                        ? 'text-white/40 border-white/10 bg-white/5 cursor-not-allowed'
+                                        : 'text-white/80 border-white/20 hover:bg-white/10'
+                                }`}
+                                title="제원 새로고침"
+                            >
+                                <Icon name="refresh-cw" size={14}/>
+                                {isSpecsRefreshing ? '새로고침 중' : '제원 새로고침'}
                             </button>
                             <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="설정">
                                 <Icon name="settings" size={17}/>
@@ -1744,8 +1754,16 @@
                                                 {excelImportStatus}
                                             </div>
                                         )}
-                                        <div className="mt-2 text-xs text-slate-400">
+                                        {specRefreshStatus && (
+                                            <div className={`mt-2 px-3 py-2 rounded-lg text-xs font-bold ${(specRefreshStatus.startsWith('오류:') || specRefreshStatus.startsWith('error:')) ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
+                                                {specRefreshStatus}
+                                            </div>
+                                        )}
+                                        <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-400">
                                             현재 등록된 제원: <span className="font-black text-slate-600">{Object.keys(vesselSpecs).length}척</span>
+                                            <span>
+                                                마지막 제원 갱신: <span className="font-black text-slate-600">{lastSpecsRefresh || '-'}</span>
+                                            </span>
                                         </div>
                                     </div>
                                     {/* API 항로 선택 */}
@@ -1861,74 +1879,6 @@
                         </div>
                     )}
 
-                    {showChangeLog && (
-                        <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4" onClick={() => setShowChangeLog(false)}>
-                            <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden text-slate-800 max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
-                                <div className="bg-[#002855] px-6 py-4 flex items-center justify-between shrink-0">
-                                    <div className="flex items-center gap-2 text-white font-black tracking-wider text-sm">
-                                        <Icon name="git-branch" size={16} className="text-blue-300"/> 관리선박변동
-                                        <span className="text-xs font-normal text-white/50 ml-1">등록 항로 기준</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <button onClick={fetchChangeLogs} className="text-xs px-3 py-1 bg-white/10 hover:bg-white/20 text-white rounded-lg font-bold transition-colors flex items-center gap-1">
-                                            <Icon name="refresh-cw" size={12}/> 새로고침
-                                        </button>
-                                        <button onClick={() => setShowChangeLog(false)} className="text-white/60 hover:text-white transition-colors">
-                                            <Icon name="x" size={18}/>
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="flex-1 overflow-y-auto p-4 min-h-0">
-                                    {selectedRoutes.length === 0 ? (
-                                        <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2">
-                                            <Icon name="route" size={28} className="opacity-40"/>
-                                            등록된 항로가 없습니다. 먼저 항로를 선택해 주세요.
-                                        </div>
-                                    ) : changeLogLoading ? (
-                                        <div className="flex items-center justify-center h-40 text-slate-400 text-sm gap-2">
-                                            <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
-                                            불러오는 중...
-                                        </div>
-                                    ) : changeLogs.length === 0 ? (
-                                        <div className="flex flex-col items-center justify-center h-40 text-slate-400 text-sm gap-2">
-                                            <Icon name="inbox" size={28} className="opacity-40"/>
-                                            <div className="text-center">
-                                                <p className="font-bold text-slate-500">변동 이력이 없습니다</p>
-                                                <p className="text-xs mt-1">매일 01시 기준 스냅샷 비교 결과만 기록됩니다</p>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div className="space-y-2">
-                                            {changeLogs.map(log => {
-                                                const isAdd = log.change_type === '증선';
-                                                const dt = new Date(log.changed_at);
-                                                const dateStr = `${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-                                                return (
-                                                    <div key={log.id} className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${isAdd ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
-                                                        <span className={`text-xs font-black px-2 py-1 rounded-full shrink-0 ${isAdd ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
-                                                            {log.change_type}
-                                                        </span>
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="flex items-center gap-2 flex-wrap">
-                                                                <span className="font-black text-sm text-slate-800">{log.psnshp_nm}</span>
-                                                                <span className="text-xs text-slate-400">{log.psnshp_cd}</span>
-                                                            </div>
-                                                            <div className="text-xs text-slate-500 mt-0.5">{log.route}</div>
-                                                        </div>
-                                                        <span className="text-xs text-slate-400 shrink-0">{dateStr}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
-                                    <span className="text-xs text-slate-400">총 {changeLogs.length}건</span>
-                                    <button onClick={() => setShowChangeLog(false)} className="px-6 py-2 bg-[#002855] hover:bg-[#003F88] text-white rounded-lg text-sm font-black transition-colors">닫기</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
 
                     {showRouteSelector && (
                         <div className="fixed inset-0 bg-black/70 z-[120] flex items-center justify-center p-4" onClick={() => setShowRouteSelector(false)}>
